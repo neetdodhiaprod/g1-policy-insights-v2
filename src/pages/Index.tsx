@@ -7,7 +7,7 @@ import ResultsSection from "@/components/ResultsSection";
 import Footer from "@/components/Footer";
 import { PolicyAnalysis } from "@/lib/mockData";
 import { extractTextFromPDF, PDFError } from "@/utils/pdfExtractor";
-import { analyzePolicyWithAI, PolicyAnalysisError } from "@/services/policyAnalyzer";
+import { analyzePolicyWithAI, PolicyAnalysisError, InvalidDocumentError } from "@/services/policyAnalyzer";
 import { useToast } from "@/hooks/use-toast";
 
 type AppState = "upload" | "extracting" | "analyzing" | "results";
@@ -42,7 +42,13 @@ const Index = () => {
       } catch (analysisError) {
         console.error("AI analysis error:", analysisError);
         
-        if (analysisError instanceof PolicyAnalysisError) {
+        if (analysisError instanceof InvalidDocumentError) {
+          toast({
+            variant: "destructive",
+            title: "Invalid Document",
+            description: analysisError.message,
+          });
+        } else if (analysisError instanceof PolicyAnalysisError) {
           toast({
             variant: "destructive",
             title: "Analysis Error",

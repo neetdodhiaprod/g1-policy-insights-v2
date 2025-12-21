@@ -5,9 +5,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const rejectDocumentTool = {
+  name: "reject_document",
+  description: "Reject the document if it is NOT a health insurance policy document",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      reason: { type: "string", description: "Brief explanation of why this is not a health insurance policy" },
+      detectedType: { type: "string", description: "What type of document this appears to be (e.g., 'Life Insurance Policy', 'Motor Insurance', 'Bank Statement', 'Resume', etc.)" }
+    },
+    required: ["reason", "detectedType"]
+  }
+};
+
 const policyAnalysisTool = {
   name: "submit_policy_analysis",
-  description: "Submit the structured analysis of a health insurance policy document",
+  description: "Submit the structured analysis of a health insurance policy document. Only use this if the document IS a health insurance policy.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -91,6 +104,36 @@ const policyAnalysisTool = {
 };
 
 const systemPrompt = `You are a health insurance policy analysis expert for Indian health insurance policies.
+
+═══════════════════════════════════════════════════════════════
+FIRST: VALIDATE DOCUMENT TYPE
+═══════════════════════════════════════════════════════════════
+
+Before analyzing, you MUST verify this is a HEALTH INSURANCE policy document.
+
+REJECT the document using reject_document tool if it is:
+- Life insurance policy
+- Motor/vehicle insurance policy
+- Travel insurance policy
+- Home/property insurance policy
+- Any other type of insurance (not health)
+- Bank statement, resume, invoice, or any non-insurance document
+- Critical illness-only policy (without hospitalization coverage)
+
+ACCEPT and analyze using submit_policy_analysis ONLY if:
+- It is a health insurance policy (mediclaim, health insurance, hospitalization policy)
+- It covers medical expenses, hospitalization, treatments
+- It mentions terms like: sum insured, hospitalization, cashless, pre-existing diseases, waiting period, room rent, etc.
+
+If in doubt, look for these keywords that indicate health insurance:
+✓ Hospitalization expenses
+✓ In-patient treatment
+✓ Cashless facility
+✓ Pre-existing disease waiting period
+✓ Room rent
+✓ ICU charges
+✓ Pre/post hospitalization
+✓ Daycare procedures
 
 ═══════════════════════════════════════════════════════════════
 STANDARD IRDAI EXCLUSIONS - DO NOT FLAG THESE AS RED FLAGS
@@ -291,12 +334,12 @@ serve(async (req) => {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 8000,
         system: systemPrompt,
-        tools: [policyAnalysisTool],
-        tool_choice: { type: "tool", name: "submit_policy_analysis" },
+        tools: [rejectDocumentTool, policyAnalysisTool],
+        tool_choice: { type: "any" },
         messages: [
           {
             role: 'user',
-            content: `Analyze this health insurance policy document thoroughly and submit your analysis using the submit_policy_analysis tool:\n\n${policyText}`
+            content: `First, verify if this is a health insurance policy document. If it is NOT a health insurance policy (e.g., life insurance, motor insurance, travel insurance, or any non-insurance document), use the reject_document tool. If it IS a health insurance policy, analyze it thoroughly and submit your analysis using the submit_policy_analysis tool:\n\n${policyText}`
           }
         ]
       }),
@@ -317,6 +360,22 @@ serve(async (req) => {
     if (!toolUse || toolUse.type !== 'tool_use') {
       console.error('No tool use in response:', data.content);
       throw new Error('Invalid response format from AI');
+    }
+
+    // Check if document was rejected
+    if (toolUse.name === 'reject_document') {
+      console.log('Document rejected:', toolUse.input);
+      return new Response(
+        JSON.stringify({ 
+          error: 'invalid_document',
+          message: `This does not appear to be a health insurance policy. Detected: ${toolUse.input.detectedType}. ${toolUse.input.reason}`,
+          detectedType: toolUse.input.detectedType
+        }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     console.log('Analysis complete:', {
