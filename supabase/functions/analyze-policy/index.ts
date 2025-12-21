@@ -135,6 +135,20 @@ CATEGORIZATION FRAMEWORK:
 - Conflicting statements
 - Missing critical details
 
+DO NOT flag these as "Needs Clarification":
+- Premium amounts / pricing — we analyze features, not cost
+- Sum insured options — user already knows their coverage amount
+- List of documents required for claims — operational, not a feature
+- Claim settlement process — operational, not a feature
+- Policy issuance details — administrative, not a feature
+
+ONLY flag as "Needs Clarification" when:
+- A critical coverage feature has vague or ambiguous language
+- Important waiting periods are not specified
+- Co-payment or room rent terms are unclear
+- Coverage limits for specific benefits are missing
+- There are conflicting statements about the same feature
+
 RULES:
 1. Show ALL bad features - never skip any red flag
 2. Show top 5-7 great features
