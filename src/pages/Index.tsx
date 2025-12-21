@@ -5,8 +5,9 @@ import UploadSection from "@/components/UploadSection";
 import LoadingState from "@/components/LoadingState";
 import ResultsSection from "@/components/ResultsSection";
 import Footer from "@/components/Footer";
-import { mockAnalysisData, PolicyAnalysis } from "@/lib/mockData";
+import { PolicyAnalysis } from "@/lib/mockData";
 import { extractTextFromPDF, PDFError } from "@/utils/pdfExtractor";
+import { analyzePolicyWithAI, PolicyAnalysisError } from "@/services/policyAnalyzer";
 import { useToast } from "@/hooks/use-toast";
 
 type AppState = "upload" | "extracting" | "analyzing" | "results";
@@ -33,12 +34,30 @@ const Index = () => {
       // Move to analyzing state
       setAppState("analyzing");
 
-      // Simulate AI analysis delay (will be replaced with real API call)
-      setTimeout(() => {
-        // Using mock data for MVP
-        setAnalysisResult(mockAnalysisData);
+      // Call the AI analysis edge function
+      try {
+        const result = await analyzePolicyWithAI(extractedText);
+        setAnalysisResult(result);
         setAppState("results");
-      }, 2000);
+      } catch (analysisError) {
+        console.error("AI analysis error:", analysisError);
+        
+        if (analysisError instanceof PolicyAnalysisError) {
+          toast({
+            variant: "destructive",
+            title: "Analysis Error",
+            description: analysisError.message,
+          });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Analysis Failed",
+            description: "Failed to analyze the policy. Please try again.",
+          });
+        }
+        
+        setAppState("upload");
+      }
 
     } catch (error) {
       console.error("PDF extraction error:", error);

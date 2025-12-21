@@ -7,7 +7,8 @@ export interface PolicyFeature {
 
 export interface PolicyAnalysis {
   policyName: string;
-  insurer: string;
+  insurerName: string;
+  policyType?: string;
   summary: {
     great: number;
     good: number;
@@ -24,7 +25,8 @@ export interface PolicyAnalysis {
 
 export const mockAnalysisData: PolicyAnalysis = {
   policyName: "Max Bupa Health Companion",
-  insurer: "Max Bupa Health Insurance",
+  insurerName: "Max Bupa Health Insurance",
+  policyType: "health",
   summary: {
     great: 5,
     good: 4,
