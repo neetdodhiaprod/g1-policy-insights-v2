@@ -237,52 +237,73 @@ IMPORTANT: Do not skip this section. Actively search the document for:
    - Zone-based restrictions = RED FLAG
 
 ═══════════════════════════════════════════════════════════════
-🟡 NEEDS CLARIFICATION - Vague or Missing Critical Info
+🟡 NEEDS CLARIFICATION - STRICT RULES
 ═══════════════════════════════════════════════════════════════
 
-Flag when:
-- A coverage uses vague terms: "reasonable", "customary", "as decided by TPA"
-- Waiting period mentioned but exact duration not specified
-- Coverage mentioned but amount/limit not specified
-- Conflicting statements in different sections
-- Key terms not defined in definitions section
+ONLY flag as "Needs Clarification" when information is GENUINELY missing or vague.
 
-DO NOT flag as needing clarification:
+DO NOT flag as "Needs Clarification":
+- Room rent stated as "Single Private AC room" — this is clear, not ambiguous
+- Room rent stated as "No capping" or "Any room" — this is clear
+- Any clearly defined benefit with specific terms
+- Standard policy language that is industry-accepted
+- Your own speculation about what "might" be unclear
 - Premium amounts (this is policy-specific)
 - Claim settlement process details
 - Standard IRDAI exclusions
 
+ONLY flag when:
+- Policy says "as per company discretion" without defining criteria
+- Policy mentions a benefit but gives no limit or duration
+- Policy has genuinely conflicting statements
+- Critical information is actually missing from the document
+- A coverage uses vague terms: "reasonable", "customary", "as decided by TPA"
+- Waiting period mentioned but exact duration not specified
+
+BAD EXAMPLE (do not do this):
+Feature: "Single Private AC room"
+Flagging as unclear because: "there might be rupee caps not mentioned"
+→ WRONG. Do not speculate. If it says Single Private AC, that's the coverage.
+
+GOOD EXAMPLE:
+Feature: "Room rent as per eligibility"
+Flagging as unclear because: "eligibility criteria not defined anywhere in document"
+→ CORRECT. This is genuinely vague.
+
 ═══════════════════════════════════════════════════════════════
-EXPLICIT EXAMPLES - FOLLOW EXACTLY
+EXPLICIT CATEGORIZATION EXAMPLES
 ═══════════════════════════════════════════════════════════════
 
-ROOM RENT EXAMPLES:
+ROOM RENT:
 - "No room rent limit" or "Any room" → GREAT
-- "Single Private AC room" or "Single AC room" → GOOD (this is standard, NOT great)
-- "Room rent up to ₹5,000/day" or any daily cap → BAD
+- "Single Private AC room" → GOOD (clear benefit, do NOT flag as unclear)
+- "Room rent up to ₹5,000/day" → BAD
+- "Room rent as per eligibility" (undefined) → NEEDS CLARIFICATION
 
-PED WAITING PERIOD EXAMPLES:
-- 12 months → GREAT
+PED WAITING PERIOD:
+- Less than 24 months → GREAT
 - 24 months (2 years) → GOOD
-- 36 months (3 years) → GOOD (this is within 24-48 month range)
+- 36 months (3 years) → GOOD
 - 48 months (4 years) → GOOD
-- 60 months (5 years) → BAD (exceeds 48 months)
+- More than 48 months → BAD
 
-SPECIFIC ILLNESS WAITING EXAMPLES:
-- 12 months → GREAT
-- 24 months (2 years) → GOOD (this is standard)
-- 36 months (3 years) → BAD (exceeds 24 months)
+SPECIFIC ILLNESS WAITING:
+- Less than 24 months → GREAT
+- 24 months (2 years) → GOOD
+- More than 24 months → BAD
 
-RESTORE/RESET BENEFIT EXAMPLES:
+RESTORE/RESET BENEFIT:
 - "Unlimited reset for any illness including same illness" → GREAT
 - "Reset for unrelated illness only" → GOOD
 - "No reset benefit" → BAD
 
 IMPORTANT RULES:
-1. "Single Private AC Room" is NOT the same as "Any Room" — categorize Single AC as GOOD
-2. 36 months PED = 3 years = within 24-48 month range = GOOD (NOT a red flag)
-3. Do not mark industry-standard features as GREAT
-4. Do not mark acceptable features as RED FLAGS
+1. Do NOT speculate about hidden terms or caps
+2. Do NOT create doubt where the policy language is clear
+3. Only flag genuinely ambiguous or missing information
+4. If a benefit is clearly stated, categorize it — don't flag as unclear
+5. "Single Private AC Room" is NOT the same as "Any Room" — Single AC is GOOD
+6. 36 months PED = 3 years = within 24-48 month range = GOOD (NOT a red flag)
 
 ═══════════════════════════════════════════════════════════════
 ANALYSIS INSTRUCTIONS - READ CAREFULLY
