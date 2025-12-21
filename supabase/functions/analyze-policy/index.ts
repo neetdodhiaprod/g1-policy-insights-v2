@@ -5,22 +5,35 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const rejectDocumentTool = {
-  name: "reject_document",
-  description: "Reject the document if it is NOT a health insurance policy document",
+// Step 1: Document validation tool (uses minimal tokens)
+const documentValidationTool = {
+  name: "validate_document",
+  description: "Validate if the uploaded document is a health insurance policy document from India",
   input_schema: {
     type: "object" as const,
     properties: {
-      reason: { type: "string", description: "Brief explanation of why this is not a health insurance policy" },
-      detectedType: { type: "string", description: "What type of document this appears to be (e.g., 'Life Insurance Policy', 'Motor Insurance', 'Bank Statement', 'Resume', etc.)" }
+      isHealthInsurance: {
+        type: "boolean",
+        description: "True if this is a health insurance policy, brochure, or policy wording document from India"
+      },
+      documentType: {
+        type: "string",
+        enum: ["Health Insurance Policy", "Health Insurance Brochure", "Policy Schedule", "Not Health Insurance"],
+        description: "Type of document detected"
+      },
+      reason: {
+        type: "string",
+        description: "Brief explanation of why this is or isn't a health insurance document"
+      }
     },
-    required: ["reason", "detectedType"]
+    required: ["isHealthInsurance", "documentType", "reason"]
   }
 };
 
+// Step 2: Policy analysis tool (full analysis)
 const policyAnalysisTool = {
   name: "submit_policy_analysis",
-  description: "Submit the structured analysis of a health insurance policy document. Only use this if the document IS a health insurance policy.",
+  description: "Submit the structured analysis of a health insurance policy document",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -103,37 +116,7 @@ const policyAnalysisTool = {
   }
 };
 
-const systemPrompt = `You are a health insurance policy analysis expert for Indian health insurance policies.
-
-═══════════════════════════════════════════════════════════════
-FIRST: VALIDATE DOCUMENT TYPE
-═══════════════════════════════════════════════════════════════
-
-Before analyzing, you MUST verify this is a HEALTH INSURANCE policy document.
-
-REJECT the document using reject_document tool if it is:
-- Life insurance policy
-- Motor/vehicle insurance policy
-- Travel insurance policy
-- Home/property insurance policy
-- Any other type of insurance (not health)
-- Bank statement, resume, invoice, or any non-insurance document
-- Critical illness-only policy (without hospitalization coverage)
-
-ACCEPT and analyze using submit_policy_analysis ONLY if:
-- It is a health insurance policy (mediclaim, health insurance, hospitalization policy)
-- It covers medical expenses, hospitalization, treatments
-- It mentions terms like: sum insured, hospitalization, cashless, pre-existing diseases, waiting period, room rent, etc.
-
-If in doubt, look for these keywords that indicate health insurance:
-✓ Hospitalization expenses
-✓ In-patient treatment
-✓ Cashless facility
-✓ Pre-existing disease waiting period
-✓ Room rent
-✓ ICU charges
-✓ Pre/post hospitalization
-✓ Daycare procedures
+const analysisSystemPrompt = `You are a health insurance policy analysis expert for Indian health insurance policies.
 
 ═══════════════════════════════════════════════════════════════
 STANDARD IRDAI EXCLUSIONS - DO NOT FLAG THESE AS RED FLAGS
@@ -299,7 +282,7 @@ Before using the submit_policy_analysis tool, verify:
 ☐ Maternity exclusion (in base plan) is NOT flagged
 ☐ Only genuine red flags that are WORSE than market standard are flagged
 
-After analyzing, use the submit_policy_analysis tool to submit your structured findings.`;
+Use the submit_policy_analysis tool to submit your structured findings.`;
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -322,8 +305,95 @@ serve(async (req) => {
       throw new Error('ANTHROPIC_API_KEY not configured');
     }
 
-    console.log('Calling Claude API with tools...');
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    // ═══════════════════════════════════════════════════════════════
+    // STEP 1: Validate document type first (uses minimal tokens)
+    // ═══════════════════════════════════════════════════════════════
+    console.log('Step 1: Validating document type...');
+    
+    const validationResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        tools: [documentValidationTool],
+        tool_choice: { type: "tool", name: "validate_document" },
+        messages: [
+          {
+            role: 'user',
+            content: `Check if this is a health insurance document from India (policy wording, brochure, or policy schedule). 
+
+A health insurance document will typically contain:
+- Terms like "hospitalization", "sum insured", "cashless", "pre-existing disease", "waiting period", "room rent", "ICU"
+- References to IRDAI (Insurance Regulatory and Development Authority of India)
+- Medical expense coverage, in-patient treatment coverage
+
+This is NOT a health insurance document if it's:
+- Life insurance, motor insurance, travel insurance, home insurance
+- Bank statement, invoice, resume, or any non-insurance document
+- A document from outside India
+
+Use the validate_document tool to submit your assessment.
+
+Document text (first 2000 characters):
+
+${policyText.substring(0, 2000)}`
+          }
+        ]
+      }),
+    });
+
+    if (!validationResponse.ok) {
+      const errorText = await validationResponse.text();
+      console.error('Claude API validation error:', validationResponse.status, errorText);
+      throw new Error(`Document validation failed: ${validationResponse.status}`);
+    }
+
+    const validationData = await validationResponse.json();
+    console.log('Validation response received');
+
+    // Extract validation result using Tools format
+    const validationToolUse = validationData.content?.find((block: any) => block.type === 'tool_use');
+    
+    if (!validationToolUse || validationToolUse.type !== 'tool_use') {
+      console.error('No tool use in validation response:', validationData.content);
+      throw new Error('Document validation failed - invalid response format');
+    }
+
+    const validation = validationToolUse.input as {
+      isHealthInsurance: boolean;
+      documentType: string;
+      reason: string;
+    };
+
+    console.log('Validation result:', validation);
+
+    // If not a health insurance document, return error immediately
+    if (!validation.isHealthInsurance) {
+      console.log('Document rejected - not health insurance');
+      return new Response(
+        JSON.stringify({ 
+          error: 'invalid_document',
+          message: `This doesn't appear to be a health insurance policy document. Detected: ${validation.documentType}. ${validation.reason}. Please upload a health insurance policy wording, brochure, or policy schedule.`,
+          detectedType: validation.documentType
+        }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // STEP 2: Full analysis (only if validation passed)
+    // ═══════════════════════════════════════════════════════════════
+    console.log('Step 2: Document validated, proceeding with full analysis...');
+    
+    const analysisResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -333,57 +403,41 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 8000,
-        system: systemPrompt,
-        tools: [rejectDocumentTool, policyAnalysisTool],
-        tool_choice: { type: "any" },
+        system: analysisSystemPrompt,
+        tools: [policyAnalysisTool],
+        tool_choice: { type: "tool", name: "submit_policy_analysis" },
         messages: [
           {
             role: 'user',
-            content: `First, verify if this is a health insurance policy document. If it is NOT a health insurance policy (e.g., life insurance, motor insurance, travel insurance, or any non-insurance document), use the reject_document tool. If it IS a health insurance policy, analyze it thoroughly and submit your analysis using the submit_policy_analysis tool:\n\n${policyText}`
+            content: `Analyze this health insurance policy document thoroughly and submit your analysis using the submit_policy_analysis tool:\n\n${policyText}`
           }
         ]
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Claude API error:', response.status, errorText);
-      throw new Error(`Claude API error: ${response.status}`);
+    if (!analysisResponse.ok) {
+      const errorText = await analysisResponse.text();
+      console.error('Claude API analysis error:', analysisResponse.status, errorText);
+      throw new Error(`Policy analysis failed: ${analysisResponse.status}`);
     }
 
-    const data = await response.json();
-    console.log('Claude response received, extracting tool use...');
+    const analysisData = await analysisResponse.json();
+    console.log('Analysis response received, extracting tool use...');
 
-    // Extract tool use response
-    const toolUse = data.content?.find((block: any) => block.type === 'tool_use');
+    // Extract analysis result using Tools format
+    const analysisToolUse = analysisData.content?.find((block: any) => block.type === 'tool_use');
     
-    if (!toolUse || toolUse.type !== 'tool_use') {
-      console.error('No tool use in response:', data.content);
-      throw new Error('Invalid response format from AI');
-    }
-
-    // Check if document was rejected
-    if (toolUse.name === 'reject_document') {
-      console.log('Document rejected:', toolUse.input);
-      return new Response(
-        JSON.stringify({ 
-          error: 'invalid_document',
-          message: `This does not appear to be a health insurance policy. Detected: ${toolUse.input.detectedType}. ${toolUse.input.reason}`,
-          detectedType: toolUse.input.detectedType
-        }),
-        { 
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
+    if (!analysisToolUse || analysisToolUse.type !== 'tool_use') {
+      console.error('No tool use in analysis response:', analysisData.content);
+      throw new Error('Policy analysis failed - invalid response format');
     }
 
     console.log('Analysis complete:', {
-      policyName: toolUse.input.policyName,
-      insurer: toolUse.input.insurer,
+      policyName: analysisToolUse.input.policyName,
+      insurer: analysisToolUse.input.insurer,
     });
 
-    return new Response(JSON.stringify(toolUse.input), {
+    return new Response(JSON.stringify(analysisToolUse.input), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
