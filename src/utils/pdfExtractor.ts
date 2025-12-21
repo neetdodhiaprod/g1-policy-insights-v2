@@ -132,7 +132,7 @@ export async function extractTextFromPDF(file: File): Promise<string> {
     if (fullText.trim().length < 100) {
       throw new PDFError(
         'SCANNED_PDF',
-        'This PDF appears to be scanned or image-based. Please upload a text-based PDF where you can select and copy text.'
+        'This PDF appears to be scanned or image-based and we cannot extract text from it. Please upload your health insurance "Policy Wording" or "Terms & Conditions" document - this is usually a separate PDF from your insurance company that contains all the coverage details, exclusions, and waiting periods. If you only have a scanned copy, please request a digital version from your insurer.'
       );
     }
     
