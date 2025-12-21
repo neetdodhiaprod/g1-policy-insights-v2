@@ -29,9 +29,20 @@ export interface AnalysisResult {
 }
 
 export class PolicyAnalysisError extends Error {
-  constructor(message: string, public statusCode?: number) {
+  constructor(
+    message: string, 
+    public statusCode?: number,
+    public errorType?: string
+  ) {
     super(message);
     this.name = 'PolicyAnalysisError';
+  }
+}
+
+export class InvalidDocumentError extends PolicyAnalysisError {
+  constructor(message: string, public detectedType?: string) {
+    super(message, 400, 'invalid_document');
+    this.name = 'InvalidDocumentError';
   }
 }
 
@@ -48,7 +59,16 @@ export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisR
   }
 
   if (data?.error) {
-    console.error('Analysis error:', data.error);
+    console.error('Analysis error:', data.error, data.message);
+    
+    // Handle invalid document type
+    if (data.error === 'invalid_document') {
+      throw new InvalidDocumentError(
+        data.message || 'This does not appear to be a health insurance policy.',
+        data.detectedType
+      );
+    }
+    
     throw new PolicyAnalysisError(data.error);
   }
 
