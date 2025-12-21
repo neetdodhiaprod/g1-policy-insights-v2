@@ -20,7 +20,7 @@ const ResultsSection = ({ analysis, onReset }: ResultsSectionProps) => {
       <SummaryCard
         summary={analysis.summary}
         policyName={analysis.policyName}
-        insurer={analysis.insurerName}
+        insurer={analysis.insurer}
       />
 
       <div className="bg-card rounded-2xl shadow-card p-6 md:p-8 mb-6">

@@ -7,8 +7,10 @@ export interface PolicyFeature {
 
 export interface PolicyAnalysis {
   policyName: string;
-  insurerName: string;
-  policyType?: string;
+  insurer: string;
+  sumInsured: string;
+  policyType: string;
+  documentType: string;
   summary: {
     great: number;
     good: number;
@@ -21,12 +23,16 @@ export interface PolicyAnalysis {
     bad: PolicyFeature[];
     unclear: PolicyFeature[];
   };
+  disclaimer: string;
 }
 
 export const mockAnalysisData: PolicyAnalysis = {
   policyName: "Max Bupa Health Companion",
-  insurerName: "Max Bupa Health Insurance",
-  policyType: "health",
+  insurer: "Max Bupa Health Insurance",
+  sumInsured: "₹10,00,000",
+  policyType: "Individual",
+  documentType: "Policy Wording",
+  disclaimer: "This analysis is for informational purposes only. Please read the full policy document and consult with the insurer for complete details.",
   summary: {
     great: 5,
     good: 4,

@@ -1,4 +1,3 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
@@ -6,77 +5,149 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface PolicyFeature {
-  name: string;
-  quote: string;
-  reference: string;
-  explanation: string;
-}
-
-interface PolicyAnalysis {
-  policyName: string;
-  insurerName: string;
-  policyType: string;
-  summary: {
-    great: number;
-    good: number;
-    bad: number;
-    unclear: number;
-  };
-  features: {
-    great: PolicyFeature[];
-    good: PolicyFeature[];
-    bad: PolicyFeature[];
-    unclear: PolicyFeature[];
-  };
-}
-
-const SYSTEM_PROMPT = `You are an expert insurance policy analyst. Your job is to analyze insurance policy documents and extract key features, categorizing them as great, good, bad, or unclear.
-
-For each feature you identify, provide:
-1. A clear name for the feature
-2. A direct quote from the policy document
-3. A reference (section/page if mentioned)
-4. A brief explanation of why this is categorized this way
-
-Categories:
-- GREAT: Exceptional coverage, better than industry standard, customer-friendly terms
-- GOOD: Standard acceptable coverage, meets expectations
-- BAD: Poor coverage, restrictive terms, hidden limitations, unfavorable conditions
-- UNCLEAR: Ambiguous language, missing information, terms that need clarification
-
-You MUST respond with valid JSON matching this exact structure:
-{
-  "policyName": "Name of the policy",
-  "insurerName": "Name of the insurance company",
-  "policyType": "health|life|auto|home|other",
-  "summary": {
-    "great": <number of great features>,
-    "good": <number of good features>,
-    "bad": <number of bad features>,
-    "unclear": <number of unclear features>
-  },
-  "features": {
-    "great": [{"name": "", "quote": "", "reference": "", "explanation": ""}],
-    "good": [{"name": "", "quote": "", "reference": "", "explanation": ""}],
-    "bad": [{"name": "", "quote": "", "reference": "", "explanation": ""}],
-    "unclear": [{"name": "", "quote": "", "reference": "", "explanation": ""}]
+const policyAnalysisTool = {
+  name: "submit_policy_analysis",
+  description: "Submit the structured analysis of a health insurance policy document",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      policyName: { type: "string", description: "Name of the policy or 'Not specified'" },
+      insurer: { type: "string", description: "Insurance company name or 'Not specified'" },
+      sumInsured: { type: "string", description: "Sum insured amount or 'Not specified'" },
+      policyType: { type: "string", enum: ["Individual", "Family Floater", "Not specified"] },
+      documentType: { type: "string", enum: ["Policy Wording", "Brochure", "Policy Schedule", "Mixed"] },
+      summary: {
+        type: "object",
+        properties: {
+          great: { type: "number" },
+          good: { type: "number" },
+          bad: { type: "number" },
+          unclear: { type: "number" }
+        },
+        required: ["great", "good", "bad", "unclear"]
+      },
+      features: {
+        type: "object",
+        properties: {
+          great: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                quote: { type: "string" },
+                reference: { type: "string" },
+                explanation: { type: "string" }
+              },
+              required: ["name", "quote", "reference", "explanation"]
+            }
+          },
+          good: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                quote: { type: "string" },
+                reference: { type: "string" },
+                explanation: { type: "string" }
+              },
+              required: ["name", "quote", "reference", "explanation"]
+            }
+          },
+          bad: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                quote: { type: "string" },
+                reference: { type: "string" },
+                explanation: { type: "string" }
+              },
+              required: ["name", "quote", "reference", "explanation"]
+            }
+          },
+          unclear: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                quote: { type: "string" },
+                reference: { type: "string" },
+                explanation: { type: "string" }
+              },
+              required: ["name", "quote", "reference", "explanation"]
+            }
+          }
+        },
+        required: ["great", "good", "bad", "unclear"]
+      },
+      disclaimer: { type: "string" }
+    },
+    required: ["policyName", "insurer", "sumInsured", "policyType", "documentType", "summary", "features", "disclaimer"]
   }
-}
+};
 
-Analyze thoroughly and be specific. Look for:
-- Coverage limits and exclusions
-- Waiting periods
-- Claim procedures
-- Premium terms
-- Renewal conditions
-- Pre-existing condition clauses
-- Network restrictions
-- Deductibles and co-pays
-- Cancellation terms`;
+const systemPrompt = `You are a health insurance policy analysis expert specializing in evaluating Indian health insurance policies for consumers.
+
+CATEGORIZATION FRAMEWORK:
+
+🟩 GREAT (Best-in-class):
+- No room rent limit / any room allowed
+- Pre-existing disease (PED) waiting < 2 years
+- Specific illness waiting < 2 years  
+- No initial 30-day waiting
+- Maternity waiting < 9 months, coverage ≥ ₹75,000
+- Restore benefit works for same illness
+- Consumables/non-medical expenses covered
+- Pre-hospitalization ≥ 60 days, Post-hospitalization ≥ 180 days
+- 0% co-pay for all ages, no zone-based co-pay
+- Cashless network > 10,000 hospitals
+- All modern treatments covered without caps
+
+🟨 GOOD (Industry standard):
+- PED waiting 2-3 years (this is standard, NOT bad)
+- Specific illness waiting 2 years (this is standard, NOT bad)
+- Standard 30-day initial waiting
+- Single AC private room allowed
+- 7,000-10,000 cashless hospitals
+- 10% co-pay only for members > 60 years
+- Maternity limit ₹25,000-₹74,999
+- Pre-hospitalization 30-59 days, Post-hospitalization 60-179 days
+
+🟥 BAD (Red flags):
+- Room rent cap ₹3,000-₹6,000/day or proportionate deduction
+- PED waiting > 3 years
+- Specific illness waiting > 2 years
+- Initial waiting > 30 days
+- Maternity not covered OR > 3 years waiting
+- Co-pay > 20% or mandatory for all ages
+- Zone-based co-pay
+- < 7,000 cashless hospitals
+- No restore benefit or restore only for unrelated illness
+- Diseases permanently excluded beyond IRDAI standard
+
+🟡 NEEDS CLARIFICATION:
+- Feature not mentioned in document
+- Vague or ambiguous language
+- Conflicting statements
+- Missing critical details
+
+RULES:
+1. Show ALL bad features - never skip any red flag
+2. Show top 5-7 great features
+3. Show top 3-5 good features  
+4. Show all items needing clarification
+5. Only flag exclusions BEYOND standard IRDAI exclusions
+6. Use professional English but explain terms simply
+7. Include exact quotes from the document with page/section references
+
+After analyzing, use the submit_policy_analysis tool to submit your structured findings.`;
 
 serve(async (req) => {
-  // Handle CORS preflight requests
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -84,24 +155,19 @@ serve(async (req) => {
   try {
     const { policyText } = await req.json();
 
-    if (!policyText || typeof policyText !== 'string') {
-      return new Response(
-        JSON.stringify({ error: 'Policy text is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!anthropicApiKey) {
-      console.error('ANTHROPIC_API_KEY is not configured');
-      return new Response(
-        JSON.stringify({ error: 'API configuration error' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!policyText || policyText.trim().length < 100) {
+      throw new Error('Policy text is too short or empty');
     }
 
     console.log(`Analyzing policy text (${policyText.length} characters)`);
 
+    const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!anthropicApiKey) {
+      console.error('ANTHROPIC_API_KEY not configured');
+      throw new Error('ANTHROPIC_API_KEY not configured');
+    }
+
+    console.log('Calling Claude API with tools...');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -111,71 +177,54 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
+        max_tokens: 8000,
+        system: systemPrompt,
+        tools: [policyAnalysisTool],
+        tool_choice: { type: "tool", name: "submit_policy_analysis" },
         messages: [
           {
             role: 'user',
-            content: `Please analyze this insurance policy document and provide a comprehensive assessment:\n\n${policyText}`,
-          },
-        ],
+            content: `Analyze this health insurance policy document thoroughly and submit your analysis using the submit_policy_analysis tool:\n\n${policyText}`
+          }
+        ]
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Anthropic API error:', response.status, errorText);
-      return new Response(
-        JSON.stringify({ error: 'Failed to analyze policy' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.error('Claude API error:', response.status, errorText);
+      throw new Error(`Claude API error: ${response.status}`);
     }
 
     const data = await response.json();
-    console.log('Anthropic response received');
+    console.log('Claude response received, extracting tool use...');
 
-    // Extract the text content from Claude's response
-    const textContent = data.content?.find((c: any) => c.type === 'text')?.text;
+    // Extract tool use response
+    const toolUse = data.content?.find((block: any) => block.type === 'tool_use');
     
-    if (!textContent) {
-      console.error('No text content in response:', data);
-      return new Response(
-        JSON.stringify({ error: 'Invalid response from AI' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Parse the JSON from Claude's response
-    let analysis: PolicyAnalysis;
-    try {
-      // Try to extract JSON from the response (Claude might include markdown code blocks)
-      const jsonMatch = textContent.match(/```json\s*([\s\S]*?)\s*```/) || 
-                        textContent.match(/```\s*([\s\S]*?)\s*```/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : textContent;
-      analysis = JSON.parse(jsonStr.trim());
-    } catch (parseError) {
-      console.error('Failed to parse Claude response as JSON:', textContent);
-      return new Response(
-        JSON.stringify({ error: 'Failed to parse analysis results' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    if (!toolUse || toolUse.type !== 'tool_use') {
+      console.error('No tool use in response:', data.content);
+      throw new Error('Invalid response format from AI');
     }
 
     console.log('Analysis complete:', {
-      policyName: analysis.policyName,
-      summary: analysis.summary,
+      policyName: toolUse.input.policyName,
+      insurer: toolUse.input.insurer,
     });
 
-    return new Response(
-      JSON.stringify({ analysis }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify(toolUse.input), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error in analyze-policy function:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to analyze policy';
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: errorMessage }),
+      { 
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
     );
   }
 });

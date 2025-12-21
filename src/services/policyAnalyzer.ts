@@ -1,5 +1,32 @@
-import { supabase } from "@/integrations/supabase/client";
-import { PolicyAnalysis } from "@/lib/mockData";
+import { supabase } from '@/integrations/supabase/client';
+
+export interface PolicyFeature {
+  name: string;
+  quote: string;
+  reference: string;
+  explanation: string;
+}
+
+export interface AnalysisResult {
+  policyName: string;
+  insurer: string;
+  sumInsured: string;
+  policyType: string;
+  documentType: string;
+  summary: {
+    great: number;
+    good: number;
+    bad: number;
+    unclear: number;
+  };
+  features: {
+    great: PolicyFeature[];
+    good: PolicyFeature[];
+    bad: PolicyFeature[];
+    unclear: PolicyFeature[];
+  };
+  disclaimer: string;
+}
 
 export class PolicyAnalysisError extends Error {
   constructor(message: string, public statusCode?: number) {
@@ -8,19 +35,16 @@ export class PolicyAnalysisError extends Error {
   }
 }
 
-export async function analyzePolicyWithAI(policyText: string): Promise<PolicyAnalysis> {
+export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisResult> {
   console.log(`Sending policy text for analysis (${policyText.length} characters)`);
-  
+
   const { data, error } = await supabase.functions.invoke('analyze-policy', {
-    body: { policyText },
+    body: { policyText }
   });
 
   if (error) {
     console.error('Edge function error:', error);
-    throw new PolicyAnalysisError(
-      error.message || 'Failed to analyze policy',
-      error.status
-    );
+    throw new PolicyAnalysisError(error.message || 'Failed to analyze policy');
   }
 
   if (data?.error) {
@@ -28,11 +52,6 @@ export async function analyzePolicyWithAI(policyText: string): Promise<PolicyAna
     throw new PolicyAnalysisError(data.error);
   }
 
-  if (!data?.analysis) {
-    console.error('No analysis in response:', data);
-    throw new PolicyAnalysisError('No analysis received from server');
-  }
-
-  console.log('Analysis received:', data.analysis.policyName);
-  return data.analysis as PolicyAnalysis;
+  console.log('Analysis received:', data.policyName);
+  return data as AnalysisResult;
 }
