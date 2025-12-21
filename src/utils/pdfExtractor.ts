@@ -6,7 +6,29 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
-export type PDFExtractionError = 'PASSWORD_PROTECTED' | 'SCANNED_PDF' | 'CORRUPTED' | 'UNKNOWN';
+export type PDFExtractionError = 'PASSWORD_PROTECTED' | 'SCANNED_PDF' | 'CORRUPTED' | 'NOT_A_POLICY' | 'UNKNOWN';
+
+// Keywords that indicate an insurance policy document
+const POLICY_KEYWORDS = [
+  'insurance', 'policy', 'coverage', 'premium', 'insured', 'beneficiary',
+  'claim', 'deductible', 'exclusion', 'sum insured', 'policyholder',
+  'indemnity', 'underwriter', 'endorsement', 'waiting period', 'co-pay',
+  'health insurance', 'life insurance', 'term plan', 'maturity', 'nominee'
+];
+
+function isPolicyDocument(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  let matchCount = 0;
+  
+  for (const keyword of POLICY_KEYWORDS) {
+    if (lowerText.includes(keyword)) {
+      matchCount++;
+    }
+  }
+  
+  // Require at least 5 policy-related keywords to be considered a policy
+  return matchCount >= 5;
+}
 
 export class PDFError extends Error {
   type: PDFExtractionError;
@@ -62,6 +84,14 @@ export async function extractTextFromPDF(file: File): Promise<string> {
       throw new PDFError(
         'SCANNED_PDF',
         'This PDF appears to be scanned or image-based. Please upload a text-based PDF where you can select and copy text.'
+      );
+    }
+    
+    // Check if the document is actually an insurance policy
+    if (!isPolicyDocument(fullText)) {
+      throw new PDFError(
+        'NOT_A_POLICY',
+        'This doesn\'t appear to be an insurance policy document. Please upload a valid insurance policy PDF.'
       );
     }
     
