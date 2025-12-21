@@ -9,25 +9,74 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 export type PDFExtractionError = 'PASSWORD_PROTECTED' | 'SCANNED_PDF' | 'CORRUPTED' | 'NOT_A_POLICY' | 'UNKNOWN';
 
 // Keywords that indicate an insurance policy document
-const POLICY_KEYWORDS = [
-  'insurance', 'policy', 'coverage', 'premium', 'insured', 'beneficiary',
-  'claim', 'deductible', 'exclusion', 'sum insured', 'policyholder',
-  'indemnity', 'underwriter', 'endorsement', 'waiting period', 'co-pay',
-  'health insurance', 'life insurance', 'term plan', 'maturity', 'nominee'
-];
+const POLICY_KEYWORDS = {
+  // General insurance terms
+  general: [
+    'insurance', 'policy', 'coverage', 'premium', 'insured', 'beneficiary',
+    'claim', 'deductible', 'exclusion', 'sum insured', 'policyholder',
+    'indemnity', 'underwriter', 'endorsement', 'waiting period', 'co-pay',
+    'policy schedule', 'terms and conditions', 'policy document', 'insurer',
+    'risk cover', 'policy period', 'renewal', 'lapse', 'grace period'
+  ],
+  // Health insurance specific
+  health: [
+    'health insurance', 'mediclaim', 'hospitalization', 'pre-existing disease',
+    'cashless', 'network hospital', 'room rent', 'icu', 'daycare procedure',
+    'sub-limit', 'no claim bonus', 'restoration benefit', 'maternity',
+    'critical illness', 'health cover', 'medical expenses', 'ambulance',
+    'domiciliary', 'ayush', 'opd', 'pre-hospitalization', 'post-hospitalization'
+  ],
+  // Life insurance specific
+  life: [
+    'life insurance', 'term plan', 'term life', 'whole life', 'endowment',
+    'maturity benefit', 'death benefit', 'survival benefit', 'nominee',
+    'life assured', 'life cover', 'mortality', 'ulip', 'surrender value',
+    'paid-up value', 'revival', 'rider', 'accidental death', 'terminal illness'
+  ],
+  // Auto/Motor insurance specific
+  auto: [
+    'motor insurance', 'vehicle insurance', 'car insurance', 'auto insurance',
+    'third party', 'own damage', 'comprehensive cover', 'idv', 'insured vehicle',
+    'ncb', 'zero depreciation', 'roadside assistance', 'engine protect',
+    'personal accident', 'passenger cover', 'theft', 'total loss', 'bumper to bumper'
+  ],
+  // Home insurance specific
+  home: [
+    'home insurance', 'property insurance', 'house insurance', 'dwelling',
+    'building insurance', 'contents insurance', 'fire insurance', 'burglary',
+    'natural calamity', 'earthquake', 'flood damage', 'structure cover',
+    'household goods', 'valuable items', 'liability cover', 'tenant', 'landlord'
+  ]
+};
 
 function isPolicyDocument(text: string): boolean {
   const lowerText = text.toLowerCase();
-  let matchCount = 0;
+  let totalMatches = 0;
+  let categoryMatches: Record<string, number> = {};
   
-  for (const keyword of POLICY_KEYWORDS) {
-    if (lowerText.includes(keyword)) {
-      matchCount++;
+  // Check all categories
+  for (const [category, keywords] of Object.entries(POLICY_KEYWORDS)) {
+    categoryMatches[category] = 0;
+    for (const keyword of keywords) {
+      if (lowerText.includes(keyword)) {
+        totalMatches++;
+        categoryMatches[category]++;
+      }
     }
   }
   
-  // Require at least 5 policy-related keywords to be considered a policy
-  return matchCount >= 5;
+  // Must have at least 3 general insurance terms
+  const hasGeneralTerms = categoryMatches['general'] >= 3;
+  
+  // Must have at least 2 matches from any specific insurance type
+  const hasSpecificType = 
+    categoryMatches['health'] >= 2 ||
+    categoryMatches['life'] >= 2 ||
+    categoryMatches['auto'] >= 2 ||
+    categoryMatches['home'] >= 2;
+  
+  // Require both general terms AND specific type keywords
+  return hasGeneralTerms && hasSpecificType;
 }
 
 export class PDFError extends Error {
