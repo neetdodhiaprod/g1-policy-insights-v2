@@ -13,7 +13,7 @@ const corsHeaders = {
 const CONFIG = {
   system: {
     model: "gemini-2.5-flash",
-    version: "3.0.0",
+    version: "3.1.0",
     api: {
       maxRetries: 3,
       retryDelayMs: 1000,
@@ -23,7 +23,8 @@ const CONFIG = {
     tokens: {
       validation: 500,
       extraction: 8192,
-      judgment: 800
+      judgment: 800,
+      explanations: 2048
     },
     cache: {
       enabled: true,
@@ -57,6 +58,28 @@ const CONFIG = {
     ncb: { great: { min: 50 }, good: { min: 10, max: 49 }, redFlag: { max: 9 } }
   },
 
+  // Keywords for code-based validation
+  validation: {
+    healthKeywords: [
+      'hospitalization', 'sum insured', 'cashless', 'pre-existing',
+      'waiting period', 'room rent', 'irdai', 'tpa', 'network hospital',
+      'in-patient', 'inpatient', 'day care', 'daycare', 'co-pay', 'copay',
+      'claim settlement', 'mediclaim', 'health insurance', 'medical expenses',
+      'hospital cash', 'critical illness', 'pre-hospitalization', 'post-hospitalization'
+    ],
+    wrongDocKeywords: [
+      'life insurance', 'term plan', 'death benefit', 'maturity benefit', 'endowment',
+      'motor insurance', 'vehicle insurance', 'car insurance', 'two wheeler',
+      'travel insurance', 'trip cancellation', 'baggage loss',
+      'home insurance', 'fire insurance', 'property insurance',
+      'bank statement', 'account summary', 'transaction history', 'ifsc code',
+      'resume', 'curriculum vitae', 'work experience', 'education qualification',
+      'invoice', 'bill of supply', 'gst number'
+    ],
+    minHealthKeywords: 5,
+    minWrongKeywords: 2
+  },
+
   standardExclusions: [
     "maternity", "pregnancy", "childbirth", "infertility", "ivf",
     "cosmetic", "plastic surgery", "aesthetic", "beauty",
@@ -80,14 +103,15 @@ const CONFIG = {
 
 type Category = "GREAT" | "GOOD" | "RED_FLAG" | "UNCLEAR";
 
-interface AnalyzedFeature {
+interface ClassifiedFeature {
+  id: string;
   name: string;
   category: Category;
-  policyStates: string;
+  value: string;
+  quote: string;
   reference: string;
-  explanation: string;
-  classifiedBy: "code" | "llm";
-  ruleApplied?: string;
+  ruleApplied: string;
+  explanation?: string;
 }
 
 interface CacheEntry {
@@ -174,6 +198,149 @@ function getUserFriendlyError(error: any): string {
   if (msg.includes('401') || msg.includes('403')) return 'Service configuration error. Contact support.';
   if (msg.includes('timeout')) return 'Analysis taking too long. Try a smaller document.';
   return 'Analysis failed. Please try again.';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HYBRID VALIDATION (Code first, Gemini fallback)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface ValidationResult {
+  isValid: boolean;
+  isHealthInsurance: boolean;
+  documentType: string;
+  reason: string;
+  method: 'code' | 'gemini';
+}
+
+function validateWithCode(text: string): { 
+  definitelyValid: boolean; 
+  definitelyInvalid: boolean; 
+  reason: string;
+  documentType: string;
+} {
+  const lower = text.toLowerCase();
+  
+  const { healthKeywords, wrongDocKeywords, minHealthKeywords, minWrongKeywords } = CONFIG.validation;
+  
+  const healthMatches = healthKeywords.filter(kw => lower.includes(kw));
+  const wrongMatches = wrongDocKeywords.filter(kw => lower.includes(kw));
+  
+  // Definitely wrong document type
+  if (wrongMatches.length >= minWrongKeywords) {
+    let docType = 'Unknown';
+    if (wrongMatches.some(w => w.includes('life') || w.includes('death') || w.includes('term plan'))) {
+      docType = 'Life Insurance';
+    } else if (wrongMatches.some(w => w.includes('motor') || w.includes('vehicle') || w.includes('car'))) {
+      docType = 'Motor Insurance';
+    } else if (wrongMatches.some(w => w.includes('travel') || w.includes('trip'))) {
+      docType = 'Travel Insurance';
+    } else if (wrongMatches.some(w => w.includes('bank') || w.includes('transaction') || w.includes('ifsc'))) {
+      docType = 'Bank Statement';
+    } else if (wrongMatches.some(w => w.includes('resume') || w.includes('vitae') || w.includes('experience'))) {
+      docType = 'Resume/CV';
+    } else if (wrongMatches.some(w => w.includes('invoice') || w.includes('gst'))) {
+      docType = 'Invoice/Bill';
+    }
+    
+    return { 
+      definitelyValid: false, 
+      definitelyInvalid: true, 
+      reason: `Detected ${docType.toLowerCase()} keywords: ${wrongMatches.slice(0, 3).join(', ')}`,
+      documentType: docType
+    };
+  }
+  
+  // Definitely health insurance
+  if (healthMatches.length >= minHealthKeywords + 2) { // 7+ keywords = confident
+    return { 
+      definitelyValid: true, 
+      definitelyInvalid: false, 
+      reason: `Found ${healthMatches.length} health insurance keywords`,
+      documentType: 'Health Insurance'
+    };
+  }
+  
+  // Uncertain - might be health insurance but not confident
+  if (healthMatches.length >= 3) {
+    return { 
+      definitelyValid: false, 
+      definitelyInvalid: false, 
+      reason: `Found only ${healthMatches.length} health keywords, need confirmation`,
+      documentType: 'Possibly Health Insurance'
+    };
+  }
+  
+  // Too few keywords - likely not health insurance
+  return { 
+    definitelyValid: false, 
+    definitelyInvalid: true, 
+    reason: `Only ${healthMatches.length} health insurance keywords found`,
+    documentType: 'Unknown Document'
+  };
+}
+
+async function validateDocument(
+  text: string, 
+  apiKey: string,
+  log: (msg: string) => void
+): Promise<ValidationResult> {
+  // Step 1: Quick code check (FREE, instant)
+  const codeCheck = validateWithCode(text.substring(0, CONFIG.system.document.validationSample));
+  
+  if (codeCheck.definitelyInvalid) {
+    log(`Code validation: INVALID (${codeCheck.documentType})`);
+    return { 
+      isValid: false, 
+      isHealthInsurance: false,
+      documentType: codeCheck.documentType,
+      reason: codeCheck.reason,
+      method: 'code'
+    };
+  }
+  
+  if (codeCheck.definitelyValid) {
+    log(`Code validation: VALID (confident)`);
+    return { 
+      isValid: true, 
+      isHealthInsurance: true,
+      documentType: 'Health Insurance Policy',
+      reason: codeCheck.reason,
+      method: 'code'
+    };
+  }
+  
+  // Step 2: Uncertain - use Gemini (~10-20% of documents)
+  log(`Code validation: UNCERTAIN, using Gemini...`);
+  
+  const geminiResult = await callGemini(
+    apiKey,
+    `Determine if this is a health insurance policy document from India.
+    
+Health insurance documents contain: hospitalization, sum insured, cashless, pre-existing disease, waiting period, room rent, IRDAI, TPA, network hospitals.
+
+NOT health insurance: life insurance, motor insurance, travel insurance, home insurance, bank statements, resumes, invoices.
+
+Respond with whether this is a health insurance document and why.`,
+    text.substring(0, CONFIG.system.document.validationSample),
+    {
+      type: "object",
+      properties: {
+        isHealthInsurance: { type: "boolean" },
+        documentType: { type: "string" },
+        reason: { type: "string" }
+      },
+      required: ["isHealthInsurance", "documentType", "reason"]
+    },
+    CONFIG.system.tokens.validation
+  );
+  
+  return {
+    isValid: geminiResult.isHealthInsurance,
+    isHealthInsurance: geminiResult.isHealthInsurance,
+    documentType: geminiResult.documentType,
+    reason: geminiResult.reason,
+    method: 'gemini'
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -274,117 +441,6 @@ function classifyNcb(percentage: number | null, maxAccumulation: number | null):
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// EXPLANATION GENERATOR
-// ═══════════════════════════════════════════════════════════════════════════
-
-function generateExplanation(featureId: string, data: any, category: Category): string {
-  const explanations: Record<string, Record<Category, (d: any) => string>> = {
-    pedWaiting: {
-      GREAT: (d) => `Pre-existing conditions covered in just ${d.months} months — faster than most policies`,
-      GOOD: (d) => `${d.months} months (${Math.round(d.months/12)} years) waiting period for pre-existing diseases is standard industry practice and reasonable`,
-      RED_FLAG: (d) => `${d.months} months (${Math.round(d.months/12)} years) wait is longer than standard. Your existing conditions remain uncovered for too long`,
-      UNCLEAR: () => `PED waiting period not clearly stated. Confirm with insurer before buying`
-    },
-    specificIllnessWaiting: {
-      GREAT: (d) => `Common surgeries like cataract, hernia, knee replacement covered after only ${d.months} months`,
-      GOOD: () => `24 months waiting for specific conditions like cataract, hernia, kidney stones is standard industry practice`,
-      RED_FLAG: (d) => `${d.months} months wait for common surgeries exceeds the 24-month industry standard`,
-      UNCLEAR: () => `Waiting period for specific illnesses/surgeries not specified`
-    },
-    initialWaiting: {
-      GREAT: () => `No initial waiting period — coverage starts from day one`,
-      GOOD: () => `30 days initial waiting period is industry standard, with reasonable exception for accidents`,
-      RED_FLAG: (d) => `${d.days}-day initial wait is unusually long. Standard is 30 days`,
-      UNCLEAR: () => `Initial waiting period not specified`
-    },
-    roomRent: {
-      GREAT: () => `No room rent restrictions — you can choose any room category without worrying about limits`,
-      GOOD: () => `Single Private AC room covered, which is industry standard`,
-      RED_FLAG: (d) => {
-        if (d.hasProportionateDeduction) return `Proportionate deduction of all associated medical expenses when room rent limit is exceeded is a significant cost burden for policyholders`;
-        if (d.limitAmount) return `Room rent capped at ₹${d.limitAmount?.toLocaleString()}/day. If actual room costs more, ALL expenses may be reduced proportionally`;
-        return `Room rent restrictions could lead to significant out-of-pocket expenses`;
-      },
-      UNCLEAR: () => `Room rent terms not clearly defined. This is a common source of claim disputes`
-    },
-    coPay: {
-      GREAT: () => `No co-payment — insurer pays 100% of eligible hospital bills`,
-      GOOD: (d) => d.isOptional ? `${d.percentage}% co-payment is optional — you chose it for lower premium` : `Co-payment of ${d.percentage}% applies only for senior citizens`,
-      RED_FLAG: (d) => {
-        if (d.isZoneBased) return `Zone-based co-payment penalizes you for seeking treatment at metro city hospitals`;
-        return `Mandatory ${d.percentage}% co-payment on all claims reduces effective coverage significantly`;
-      },
-      UNCLEAR: () => `Co-payment terms not clear`
-    },
-    restore: {
-      GREAT: (d) => d.sameIllnessCovered ? `Automatic restoration of full sum insured once per year after exhaustion - excellent protection for multiple claims` : `Unlimited restore — sum insured refills every time you exhaust it`,
-      GOOD: () => `Restore benefit available for unrelated illnesses. Won't refill for same condition in same year`,
-      RED_FLAG: () => `No restore/recharge benefit — once sum insured exhausted, no coverage until renewal`,
-      UNCLEAR: () => `Restore benefit details not clear`
-    },
-    preHospitalization: {
-      GREAT: (d) => `${d.days} days pre-hospitalization coverage is excellent for tests and consultations before admission`,
-      GOOD: (d) => `${d.days} days pre-hospitalization coverage meets industry standard`,
-      RED_FLAG: (d) => `Only ${d.days} days pre-hospitalization may not cover all diagnostic expenses`,
-      UNCLEAR: () => `Pre-hospitalization coverage period not specified`
-    },
-    postHospitalization: {
-      GREAT: (d) => `${d.days} days post-discharge coverage is excellent for follow-ups and recovery expenses`,
-      GOOD: (d) => `${d.days} days post-hospitalization is standard for follow-up care`,
-      RED_FLAG: (d) => `Only ${d.days} days post-discharge may not cover extended recovery needs`,
-      UNCLEAR: () => `Post-hospitalization coverage period not specified`
-    },
-    consumables: {
-      GREAT: () => `All consumables and non-medical items covered — gloves, PPE, syringes won't come from your pocket`,
-      GOOD: () => `Consumables covered with sub-limits`,
-      RED_FLAG: () => `Consumables not covered — expect ₹10,000-50,000 extra on any hospital bill`,
-      UNCLEAR: () => `Consumables coverage not specified`
-    },
-    networkHospitals: {
-      GREAT: (d) => `Extensive network of ${d.count?.toLocaleString()}+ hospitals ensures cashless access almost anywhere`,
-      GOOD: (d) => `${d.count?.toLocaleString()} hospitals provides good coverage`,
-      RED_FLAG: (d) => `Only ${d.count?.toLocaleString()} hospitals — limited options for cashless treatment`,
-      UNCLEAR: () => `Network size not specified`
-    },
-    daycare: {
-      GREAT: (d) => `Extensive list of ${d.count}+ day care procedures covered, providing comprehensive outpatient surgical coverage`,
-      GOOD: () => `Day care procedures covered as per standard list`,
-      RED_FLAG: () => `Limited day care coverage`,
-      UNCLEAR: () => `Day care coverage details not specified`
-    },
-    modernTreatments: {
-      GREAT: () => `Comprehensive coverage of modern treatments including robotic surgeries, immunotherapy, and stem cell therapy without sub-limits`,
-      GOOD: () => `Modern treatments covered with some limits`,
-      RED_FLAG: () => `Modern treatments like robotic surgery may not be covered`,
-      UNCLEAR: () => `Coverage for advanced treatments not specified`
-    },
-    ayush: {
-      GREAT: () => `Coverage for alternative medicine systems (Ayurveda, Yoga, Unani, Siddha, Homeopathy) which is valuable in Indian context`,
-      GOOD: () => `AYUSH treatments covered with sub-limits`,
-      RED_FLAG: () => `AYUSH treatments not covered`,
-      UNCLEAR: () => `AYUSH coverage not specified`
-    },
-    ncb: {
-      GREAT: (d) => `${d.percentagePerYear}% cumulative bonus per claim-free year is excellent`,
-      GOOD: (d) => `${d.percentagePerYear}% cumulative bonus per claim-free year up to ${d.maxAccumulation || 50}% maximum is good and standard in industry`,
-      RED_FLAG: (d) => `Low NCB of ${d.percentagePerYear}% barely increases coverage`,
-      UNCLEAR: () => `NCB details not specified`
-    },
-    globalCoverage: {
-      GREAT: () => `Worldwide coverage including planned treatments abroad`,
-      GOOD: (d) => `Global coverage with ${d.daysPerTrip || 45} continuous days per trip provides good international protection`,
-      RED_FLAG: () => `International coverage very limited`,
-      UNCLEAR: () => `International coverage terms not clear`
-    }
-  };
-
-  const featureExp = explanations[featureId];
-  if (!featureExp) return `${featureId}: ${category}`;
-  const fn = featureExp[category];
-  return fn ? fn(data) : `${featureId}: ${category}`;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // GEMINI API
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -401,7 +457,7 @@ async function callGemini(apiKey: string, prompt: string, content: string, schem
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `${prompt}\n\n---\n\n${content}` }] }],
+            contents: [{ parts: [{ text: content ? `${prompt}\n\n---\n\n${content}` : prompt }] }],
             generationConfig: {
               temperature: CONFIG.system.api.temperature,
               maxOutputTokens: maxTokens,
@@ -417,13 +473,11 @@ async function callGemini(apiKey: string, prompt: string, content: string, schem
           })
         }
       );
-
       if (!response.ok) {
         const errorText = await response.text();
         if ([400, 401, 403].includes(response.status)) throw new Error(`API error ${response.status}: ${errorText}`);
         throw new Error(`Retryable error ${response.status}`);
       }
-
       const data = await response.json();
       if (data.candidates?.[0]?.finishReason === 'SAFETY') throw new Error('Content blocked');
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -444,17 +498,6 @@ async function callGemini(apiKey: string, prompt: string, content: string, schem
 // ═══════════════════════════════════════════════════════════════════════════
 // SCHEMAS
 // ═══════════════════════════════════════════════════════════════════════════
-
-const validationSchema = {
-  type: "object",
-  properties: {
-    isHealthInsurance: { type: "boolean" },
-    documentType: { type: "string" },
-    reason: { type: "string" },
-    insurerName: { type: "string" }
-  },
-  required: ["isHealthInsurance", "documentType", "reason", "insurerName"]
-};
 
 const extractionSchema = {
   type: "object",
@@ -483,7 +526,7 @@ const extractionSchema = {
         consumables: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, fullyCovered: { type: "boolean" }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "fullyCovered", "quote", "reference"] },
         networkHospitals: { type: "object", properties: { found: { type: "boolean" }, count: { type: "integer", nullable: true }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "quote", "reference"] },
         daycare: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, count: { type: "integer", nullable: true }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "quote", "reference"] },
-        modernTreatments: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, fullyCovered: { type: "boolean" }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "quote", "reference"] },
+        modernTreatments: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, fullyCovered: { type: "boolean" }, treatmentsList: { type: "string" }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "quote", "reference"] },
         ayush: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, fullyCovered: { type: "boolean" }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "quote", "reference"] },
         ambulance: { type: "object", properties: { found: { type: "boolean" }, covered: { type: "boolean" }, unlimited: { type: "boolean" }, limit: { type: "number", nullable: true }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "covered", "quote", "reference"] },
         diseaseSubLimits: { type: "object", properties: { found: { type: "boolean" }, hasSubLimits: { type: "boolean" }, details: { type: "string" }, quote: { type: "string" }, reference: { type: "string" } }, required: ["found", "hasSubLimits", "quote", "reference"] },
@@ -505,32 +548,57 @@ const uniqueJudgmentSchema = {
   type: "object",
   properties: {
     category: { type: "string", enum: ["GREAT", "GOOD", "RED_FLAG"] },
-    explanation: { type: "string" }
+    reasoning: { type: "string" }
   },
-  required: ["category", "explanation"]
+  required: ["category", "reasoning"]
+};
+
+const explanationsSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      explanation: { type: "string" }
+    },
+    required: ["name", "explanation"]
+  }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROMPTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-const validationPrompt = `Determine if this is a health insurance policy document from India. Health insurance documents contain: hospitalization, sum insured, cashless, pre-existing disease, waiting period, room rent, IRDAI. NOT health insurance: life insurance, motor insurance, travel insurance, bank statements.`;
-
 const extractionPrompt = `Extract features from this Indian health insurance policy.
 
 RULES:
-1. Extract EXACT QUOTES - copy-paste relevant text
+1. Extract EXACT QUOTES - copy-paste relevant text from the policy
 2. Include CLAUSE/SECTION REFERENCE (e.g., "Clause 3.1.7", "Section 4.2(a)")
 3. Convert years to months (3 years = 36 months)
 4. If not found, set found: false
 
 EXTRACT: PED waiting, specific illness waiting, initial waiting, room rent (limits, proportionate deduction), co-pay (%, optional/mandatory, zone-based), restore benefit, pre/post hospitalization days, consumables, network hospitals count, day care, modern treatments, AYUSH, ambulance, disease sub-limits, NCB, global coverage, domiciliary, organ donor, maternity.
 
-UNIQUE FEATURES: Find innovative benefits beyond standard coverage.
+UNIQUE FEATURES: Find any innovative benefits beyond standard coverage that make this policy special.
 
-UNCLEAR CLAUSES: Flag ambiguous or contradictory terms with exact confusing language.
+UNCLEAR CLAUSES: Flag any ambiguous, contradictory, or confusing terms with the exact problematic language.
 
-NON-STANDARD EXCLUSIONS: Only exclusions beyond standard IRDAI list.`;
+NON-STANDARD EXCLUSIONS: Only list exclusions that go beyond standard IRDAI exclusions.`;
+
+const explanationsPrompt = `Write customer-friendly explanations for each health insurance feature.
+
+RULES:
+1. Write 1-2 clear sentences explaining what this means for the customer
+2. Use the exact values from the policy (months, days, percentages)
+3. Reference the policy quote where helpful
+4. For GREAT features: Explain why this is better than typical policies
+5. For GOOD features: Explain this is standard/acceptable
+6. For RED_FLAG: Clearly explain the risk or downside
+7. For UNCLEAR: Explain what's confusing and what the customer should verify
+8. Be direct and helpful, not promotional
+9. Use simple language a non-expert can understand
+
+FEATURES TO EXPLAIN:`;
 
 const uniqueJudgmentPrompt = `Evaluate this health insurance feature:
 
@@ -538,9 +606,9 @@ Feature: {name}
 Description: {description}
 Quote: "{quote}"
 
-Is this: GREAT (rare, innovative), GOOD (useful but common), or RED_FLAG (hidden catches)?
+Is this: GREAT (rare, innovative, significantly benefits customer), GOOD (useful but common), or RED_FLAG (has hidden catches/restrictions)?
 
-Give category and 1-2 sentence explanation.`;
+Give category and 1-2 sentence reasoning.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MERGE EXTRACTIONS
@@ -576,6 +644,43 @@ function mergeExtractions(extractions: any[]): any {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GENERATE EXPLANATIONS (Gemini batch call)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function generateExplanations(
+  apiKey: string,
+  features: ClassifiedFeature[],
+  log: (msg: string) => void
+): Promise<Map<string, string>> {
+  if (features.length === 0) return new Map();
+  
+  log(`Generating explanations for ${features.length} features...`);
+  
+  const featureDescriptions = features.map(f => 
+    `- ${f.name} [${f.category}]
+  Value: ${f.value}
+  Quote: "${f.quote.substring(0, 200)}${f.quote.length > 200 ? '...' : ''}"
+  Reference: ${f.reference}`
+  ).join('\n\n');
+  
+  const explanations = await callGemini(
+    apiKey,
+    explanationsPrompt + '\n\n' + featureDescriptions,
+    '',
+    explanationsSchema,
+    CONFIG.system.tokens.explanations
+  );
+  
+  const explanationMap = new Map<string, string>();
+  for (const exp of explanations) {
+    explanationMap.set(exp.name, exp.explanation);
+  }
+  
+  log(`Generated ${explanationMap.size} explanations`);
+  return explanationMap;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -593,26 +698,35 @@ serve(async (req) => {
     }
 
     log(`Document: ${policyText.length} chars`);
-
+    
+    // Check cache
     const docHash = await hashDocument(policyText);
     const cached = getCached(docHash);
-    if (cached) { log('Cache hit'); return new Response(JSON.stringify({ ...cached, _cached: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }); }
+    if (cached) { 
+      log('Cache hit'); 
+      return new Response(JSON.stringify({ ...cached, _cached: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }); 
+    }
 
     const apiKey = Deno.env.get('GEMINI_API_KEY');
     if (!apiKey) throw new Error('API not configured');
 
-    // Validate
+    // Step 1: Hybrid Validation (code first, Gemini fallback)
     log('Validating...');
-    const validation = await callGemini(apiKey, validationPrompt, policyText.substring(0, CONFIG.system.document.validationSample), validationSchema, CONFIG.system.tokens.validation);
-
+    const validation = await validateDocument(policyText, apiKey, log);
+    
     if (!validation.isHealthInsurance) {
-      return new Response(JSON.stringify({ error: 'invalid_document', message: `Not a health insurance document. Detected: ${validation.documentType}` }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ 
+        error: 'invalid_document', 
+        message: `Not a health insurance document. Detected: ${validation.documentType}. ${validation.reason}`,
+        validationMethod: validation.method
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Extract
-    log('Extracting...');
+    // Step 2: Extract features
+    log('Extracting features...');
     const chunks = chunkDocument(policyText);
     let extraction: any;
+    
     if (chunks.length === 1) {
       extraction = await callGemini(apiKey, extractionPrompt, chunks[0], extractionSchema, CONFIG.system.tokens.extraction);
     } else {
@@ -624,92 +738,111 @@ serve(async (req) => {
       extraction = mergeExtractions(exts);
     }
 
-    // Classify
+    log(`Extracted: ${extraction.uniqueFeatures?.length || 0} unique features, ${extraction.unclearClauses?.length || 0} unclear clauses`);
+
+    // Step 3: Classify with code
     log('Classifying...');
-    const features: AnalyzedFeature[] = [];
+    const classifiedFeatures: ClassifiedFeature[] = [];
     const f = extraction.features;
 
-    const add = (id: string, name: string, data: any, classifyFn: () => { category: Category; rule: string }) => {
+    const addFeature = (id: string, name: string, data: any, classifyFn: () => { category: Category; rule: string }, value: string) => {
       if (!data?.found) return;
       const { category, rule } = classifyFn();
-      features.push({ name, category, policyStates: data.quote || '', reference: data.reference || '', explanation: generateExplanation(id, data, category), classifiedBy: "code", ruleApplied: rule });
+      classifiedFeatures.push({ id, name, category, value, quote: data.quote || '', reference: data.reference || '', ruleApplied: rule });
     };
 
-    add('pedWaiting', 'PED Waiting Period', f.pedWaiting, () => classifyPedWaiting(sanitizeNumber(f.pedWaiting?.months, 'months')));
-    add('specificIllnessWaiting', 'Specific Illness Waiting Period', f.specificIllnessWaiting, () => classifySpecificIllnessWaiting(sanitizeNumber(f.specificIllnessWaiting?.months, 'months')));
-    add('initialWaiting', 'Initial Waiting Period', f.initialWaiting, () => classifyInitialWaiting(sanitizeNumber(f.initialWaiting?.days, 'days')));
-    add('roomRent', 'Room Rent', f.roomRent, () => classifyRoomRent(f.roomRent));
+    // Standard features
+    addFeature('pedWaiting', 'PED Waiting Period', f.pedWaiting, () => classifyPedWaiting(sanitizeNumber(f.pedWaiting?.months, 'months')), `${f.pedWaiting?.months || '?'} months`);
+    addFeature('specificIllnessWaiting', 'Specific Illness Waiting Period', f.specificIllnessWaiting, () => classifySpecificIllnessWaiting(sanitizeNumber(f.specificIllnessWaiting?.months, 'months')), `${f.specificIllnessWaiting?.months || '?'} months`);
+    addFeature('initialWaiting', 'Initial Waiting Period', f.initialWaiting, () => classifyInitialWaiting(sanitizeNumber(f.initialWaiting?.days, 'days')), `${f.initialWaiting?.days || '?'} days`);
+    addFeature('roomRent', 'Room Rent', f.roomRent, () => classifyRoomRent(f.roomRent), f.roomRent?.rawValue || 'Not specified');
     
     if (f.coPay?.found) {
       const r = classifyCoPay(f.coPay);
-      features.push({ name: f.coPay.optionalCoverName ? `${f.coPay.optionalCoverName} Co-payment` : 'Co-payment', category: r.category, policyStates: f.coPay.quote || '', reference: f.coPay.reference || '', explanation: generateExplanation('coPay', f.coPay, r.category), classifiedBy: "code", ruleApplied: r.rule });
+      classifiedFeatures.push({ id: 'coPay', name: f.coPay.optionalCoverName ? `${f.coPay.optionalCoverName} Co-payment` : 'Co-payment', category: r.category, value: `${f.coPay.percentage || 0}%${f.coPay.isOptional ? ' (optional)' : ''}`, quote: f.coPay.quote || '', reference: f.coPay.reference || '', ruleApplied: r.rule });
     }
     
-    add('restore', 'Automatic Recharge Benefit', f.restore, () => classifyRestore(f.restore));
+    addFeature('restore', 'Automatic Recharge Benefit', f.restore, () => classifyRestore(f.restore), f.restore?.sameIllnessCovered ? 'Same illness covered' : 'Different illness only');
     
+    // Pre + Post hospitalization combined
     if (f.preHospitalization?.found || f.postHospitalization?.found) {
       const preDays = sanitizeNumber(f.preHospitalization?.days, 'days');
       const postDays = sanitizeNumber(f.postHospitalization?.days, 'days');
       const preR = classifyPreHospitalization(preDays);
       const postR = classifyPostHospitalization(postDays);
-      const cat = (preR.category === "RED_FLAG" || postR.category === "RED_FLAG") ? "RED_FLAG" : (preR.category === "GOOD" || postR.category === "GOOD") ? "GOOD" : "GREAT";
-      features.push({ name: 'Pre and Post Hospitalization Coverage', category: cat as Category, policyStates: f.preHospitalization?.quote || f.postHospitalization?.quote || '', reference: f.preHospitalization?.reference || f.postHospitalization?.reference || '', explanation: `${preDays} days pre and ${postDays} days post hospitalization coverage ${cat === "GOOD" ? "meets industry standard" : cat === "GREAT" ? "is excellent" : "is below standard"}`, classifiedBy: "code", ruleApplied: `Pre ${preDays}, Post ${postDays}` });
+      const cat: Category = (preR.category === "RED_FLAG" || postR.category === "RED_FLAG") ? "RED_FLAG" : (preR.category === "GOOD" || postR.category === "GOOD") ? "GOOD" : "GREAT";
+      classifiedFeatures.push({ id: 'prePostHosp', name: 'Pre and Post Hospitalization Coverage', category: cat, value: `Pre: ${preDays || '?'} days, Post: ${postDays || '?'} days`, quote: f.preHospitalization?.quote || f.postHospitalization?.quote || '', reference: f.preHospitalization?.reference || f.postHospitalization?.reference || '', ruleApplied: `Pre ${preDays}, Post ${postDays}` });
     }
     
-    add('consumables', 'Consumables Coverage', f.consumables, () => classifyConsumables(f.consumables));
-    add('networkHospitals', 'Cashless Hospital Network', f.networkHospitals, () => classifyNetworkHospitals(sanitizeNumber(f.networkHospitals?.count, 'count')));
-    add('daycare', 'Day Care Procedures', f.daycare, () => classifyDaycare(f.daycare));
+    addFeature('consumables', 'Consumables Coverage', f.consumables, () => classifyConsumables(f.consumables), f.consumables?.fullyCovered ? 'Fully covered' : 'With sub-limit');
+    addFeature('networkHospitals', 'Cashless Hospital Network', f.networkHospitals, () => classifyNetworkHospitals(sanitizeNumber(f.networkHospitals?.count, 'count')), `${f.networkHospitals?.count || '?'} hospitals`);
+    addFeature('daycare', 'Day Care Procedures', f.daycare, () => classifyDaycare(f.daycare), f.daycare?.count ? `${f.daycare.count}+ procedures` : 'Covered');
     
     if (f.modernTreatments?.found && f.modernTreatments?.covered) {
-      features.push({ name: 'Advanced Technology Methods Coverage', category: f.modernTreatments.fullyCovered ? "GREAT" : "GOOD", policyStates: f.modernTreatments.quote || '', reference: f.modernTreatments.reference || '', explanation: generateExplanation('modernTreatments', f.modernTreatments, f.modernTreatments.fullyCovered ? "GREAT" : "GOOD"), classifiedBy: "code" });
+      classifiedFeatures.push({ id: 'modernTreatments', name: 'Advanced Technology Methods Coverage', category: f.modernTreatments.fullyCovered ? "GREAT" : "GOOD", value: f.modernTreatments.treatmentsList || 'Various treatments', quote: f.modernTreatments.quote || '', reference: f.modernTreatments.reference || '', ruleApplied: f.modernTreatments.fullyCovered ? "Modern treatments fully covered" : "Modern treatments with limits" });
     }
     
     if (f.ayush?.found && f.ayush?.covered) {
-      features.push({ name: 'AYUSH Treatments Coverage', category: f.ayush.fullyCovered ? "GREAT" : "GOOD", policyStates: f.ayush.quote || '', reference: f.ayush.reference || '', explanation: generateExplanation('ayush', f.ayush, f.ayush.fullyCovered ? "GREAT" : "GOOD"), classifiedBy: "code" });
+      classifiedFeatures.push({ id: 'ayush', name: 'AYUSH Treatments Coverage', category: f.ayush.fullyCovered ? "GREAT" : "GOOD", value: f.ayush.fullyCovered ? 'Full sum insured' : 'With sub-limit', quote: f.ayush.quote || '', reference: f.ayush.reference || '', ruleApplied: "AYUSH covered" });
     }
     
-    add('ncb', 'No Claims Bonus Structure', f.ncb, () => classifyNcb(f.ncb?.percentagePerYear, f.ncb?.maxAccumulation));
+    addFeature('ncb', 'No Claims Bonus Structure', f.ncb, () => classifyNcb(f.ncb?.percentagePerYear, f.ncb?.maxAccumulation), `${f.ncb?.percentagePerYear || '?'}% per year, max ${f.ncb?.maxAccumulation || '?'}%`);
     
     if (f.globalCoverage?.found && f.globalCoverage?.covered) {
-      features.push({ name: 'Global Coverage Option', category: "GOOD", policyStates: f.globalCoverage.quote || '', reference: f.globalCoverage.reference || '', explanation: generateExplanation('globalCoverage', f.globalCoverage, "GOOD"), classifiedBy: "code" });
+      classifiedFeatures.push({ id: 'globalCoverage', name: 'Global Coverage Option', category: "GOOD", value: `${f.globalCoverage.daysPerTrip || '?'} days per trip`, quote: f.globalCoverage.quote || '', reference: f.globalCoverage.reference || '', ruleApplied: "Global coverage available" });
       if (f.globalCoverage.hasCoPay && f.globalCoverage.coPayPercentage) {
-        features.push({ name: 'Co-payment for Global Coverage', category: "RED_FLAG", policyStates: f.globalCoverage.quote || '', reference: f.globalCoverage.reference || '', explanation: `Mandatory ${f.globalCoverage.coPayPercentage}% co-payment on all international claims reduces effective coverage significantly`, classifiedBy: "code" });
+        classifiedFeatures.push({ id: 'globalCoPay', name: 'Co-payment for Global Coverage', category: "RED_FLAG", value: `${f.globalCoverage.coPayPercentage}%`, quote: f.globalCoverage.quote || '', reference: f.globalCoverage.reference || '', ruleApplied: `Global co-pay ${f.globalCoverage.coPayPercentage}%` });
       }
     }
     
     if (f.diseaseSubLimits?.found && f.diseaseSubLimits?.hasSubLimits) {
-      features.push({ name: 'Disease-wise Sub-Limits', category: "RED_FLAG", policyStates: f.diseaseSubLimits.quote || '', reference: f.diseaseSubLimits.reference || '', explanation: `Disease sub-limits: ${f.diseaseSubLimits.details}. Actual costs often exceed these caps`, classifiedBy: "code" });
+      classifiedFeatures.push({ id: 'diseaseSubLimits', name: 'Disease-wise Sub-Limits', category: "RED_FLAG", value: f.diseaseSubLimits.details || 'Sub-limits present', quote: f.diseaseSubLimits.quote || '', reference: f.diseaseSubLimits.reference || '', ruleApplied: "Disease sub-limits reduce coverage" });
     }
     
     if (f.roomRent?.hasProportionateDeduction) {
-      features.push({ name: 'Room Rent Proportionate Deduction', category: "RED_FLAG", policyStates: f.roomRent.quote || '', reference: f.roomRent.reference || '', explanation: 'Proportionate deduction of all associated medical expenses when room rent limit is exceeded is a significant cost burden for policyholders', classifiedBy: "code" });
+      classifiedFeatures.push({ id: 'proportionateDeduction', name: 'Room Rent Proportionate Deduction', category: "RED_FLAG", value: 'All expenses reduced proportionally', quote: f.roomRent.quote || '', reference: f.roomRent.reference || '', ruleApplied: "Proportionate deduction clause" });
     }
 
-    // Unique features
+    // Step 4: Judge unique features
     for (const uf of extraction.uniqueFeatures || []) {
       if (!validateQuote(uf.quote, policyText)) continue;
       try {
         const j = await callGemini(apiKey, uniqueJudgmentPrompt.replace('{name}', uf.name).replace('{description}', uf.description).replace('{quote}', uf.quote), '', uniqueJudgmentSchema, CONFIG.system.tokens.judgment);
-        features.push({ name: uf.name, category: j.category as Category, policyStates: uf.quote, reference: uf.reference, explanation: j.explanation, classifiedBy: "llm" });
-      } catch (e) { log(`Error: ${e}`); }
+        classifiedFeatures.push({ id: `unique_${uf.name}`, name: uf.name, category: j.category as Category, value: uf.description, quote: uf.quote, reference: uf.reference, ruleApplied: j.reasoning });
+      } catch (e) { log(`Error judging unique feature: ${e}`); }
     }
 
-    // Unclear
+    // Step 5: Add unclear clauses
     for (const uc of extraction.unclearClauses || []) {
-      features.push({ name: uc.name, category: "UNCLEAR", policyStates: uc.quote, reference: uc.reference, explanation: uc.issue, classifiedBy: "llm" });
+      classifiedFeatures.push({ id: `unclear_${uc.name}`, name: uc.name, category: "UNCLEAR", value: uc.issue, quote: uc.quote, reference: uc.reference, ruleApplied: "Needs clarification" });
     }
 
-    // Build response
-    const great = features.filter(f => f.category === "GREAT");
-    const good = features.filter(f => f.category === "GOOD");
-    const redFlags = features.filter(f => f.category === "RED_FLAG");
-    const unclear = features.filter(f => f.category === "UNCLEAR");
+    log(`Classified ${classifiedFeatures.length} features`);
 
-    const fmt = (arr: AnalyzedFeature[]) => arr.map(f => ({ name: f.name, policyStates: f.policyStates, reference: f.reference, explanation: f.explanation }));
+    // Step 6: Generate explanations with Gemini (batch call)
+    const explanationMap = await generateExplanations(apiKey, classifiedFeatures, log);
+    
+    // Merge explanations into features
+    for (const feature of classifiedFeatures) {
+      feature.explanation = explanationMap.get(feature.name) || `${feature.name}: ${feature.value}`;
+    }
+
+    // Step 7: Build response
+    const great = classifiedFeatures.filter(f => f.category === "GREAT");
+    const good = classifiedFeatures.filter(f => f.category === "GOOD");
+    const redFlags = classifiedFeatures.filter(f => f.category === "RED_FLAG");
+    const unclear = classifiedFeatures.filter(f => f.category === "UNCLEAR");
+
+    const fmt = (arr: ClassifiedFeature[]) => arr.map(f => ({ 
+      name: f.name, 
+      policyStates: f.quote, 
+      reference: f.reference, 
+      explanation: f.explanation || f.value 
+    }));
 
     const result = {
       policyName: extraction.policyInfo?.name || 'Unknown Policy',
-      insurer: extraction.policyInfo?.insurer || validation.insurerName || 'Unknown',
+      insurer: extraction.policyInfo?.insurer || 'Unknown',
       sumInsured: extraction.policyInfo?.sumInsured || 'Not specified',
       policyType: extraction.policyInfo?.policyType || 'Not specified',
       summary: { great: great.length, good: good.length, redFlags: redFlags.length, unclear: unclear.length },
@@ -717,8 +850,14 @@ serve(async (req) => {
       goodFeatures: fmt(good),
       redFlags: fmt(redFlags),
       needsClarification: fmt(unclear),
-      disclaimer: "This analysis is for informational purposes. Standard IRDAI exclusions apply. Verify with insurer before purchase.",
-      _meta: { processingTimeMs: Date.now() - startTime, documentHash: docHash.substring(0, 16), version: CONFIG.system.version, model: CONFIG.system.model }
+      disclaimer: "This analysis is for informational purposes. Standard IRDAI exclusions apply. Verify all details with your insurer before purchase.",
+      _meta: { 
+        processingTimeMs: Date.now() - startTime, 
+        documentHash: docHash.substring(0, 16), 
+        version: CONFIG.system.version, 
+        model: CONFIG.system.model,
+        validationMethod: validation.method
+      }
     };
 
     setCache(docHash, result);
