@@ -634,17 +634,7 @@ const uniqueJudgmentSchema = {
   required: ["category", "reasoning"]
 };
 
-const explanationsSchema = {
-  type: "array",
-  items: {
-    type: "object",
-    properties: {
-      name: { type: "string" },
-      explanation: { type: "string" }
-    },
-    required: ["name", "explanation"]
-  }
-};
+// explanationsSchema removed - using inline code-based explanations instead
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROMPTS
@@ -667,20 +657,7 @@ UNCLEAR CLAUSES: Flag any ambiguous, contradictory, or confusing terms with the 
 
 NON-STANDARD EXCLUSIONS: Only list exclusions that go beyond standard IRDAI list.`;
 
-const explanationsPrompt = `Write customer-friendly explanations for each health insurance feature.
-
-RULES:
-1. Write 1-2 clear sentences explaining what this means for the customer
-2. Use the exact values from the policy (months, days, percentages)
-3. Reference the policy quote where helpful
-4. For GREAT features: Explain why this is better than typical policies
-5. For GOOD features: Explain this is standard/acceptable
-6. For RED_FLAG: Clearly explain the risk or downside
-7. For UNCLEAR: Explain what's confusing and what the customer should verify
-8. Be direct and helpful, not promotional
-9. Use simple language a non-expert can understand
-
-FEATURES TO EXPLAIN:`;
+// explanationsPrompt removed - using inline code-based explanations instead
 
 const uniqueJudgmentPrompt = `Evaluate this health insurance feature:
 
@@ -729,37 +706,19 @@ function mergeExtractions(extractions: any[]): any {
 // GENERATE EXPLANATIONS (Gemini batch call)
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function generateExplanations(
-  apiKey: string,
-  features: ClassifiedFeature[],
-  log: (msg: string) => void
-): Promise<Map<string, string>> {
-  if (features.length === 0) return new Map();
+// Generate explanations inline without extra API call
+function generateExplanation(feature: ClassifiedFeature): string {
+  const { name, category, value, quote } = feature;
+  const shortQuote = quote.length > 100 ? quote.substring(0, 100) + '...' : quote;
   
-  log(`Generating explanations for ${features.length} features...`);
+  const templates: Record<Category, (n: string, v: string, q: string) => string> = {
+    "GREAT": (n, v, q) => `${n} is set at ${v}, which is better than most policies in the market. This provides enhanced protection for you.`,
+    "GOOD": (n, v, q) => `${n} is ${v}, which meets standard industry norms. This is an acceptable level of coverage.`,
+    "RED_FLAG": (n, v, q) => `${n} at ${v} is a concern. This may limit your coverage or increase out-of-pocket costs. Review carefully before purchasing.`,
+    "UNCLEAR": (n, v, q) => `${n} has ambiguous terms: "${v}". Clarify this with the insurer before purchasing.`
+  };
   
-  const featureDescriptions = features.map(f => 
-    `- ${f.name} [${f.category}]
-  Value: ${f.value}
-  Quote: "${f.quote.substring(0, 200)}${f.quote.length > 200 ? '...' : ''}"
-  Reference: ${f.reference}`
-  ).join('\n\n');
-  
-  const explanations = await callGemini(
-    apiKey,
-    explanationsPrompt + '\n\n' + featureDescriptions,
-    '',
-    explanationsSchema,
-    CONFIG.system.tokens.explanations
-  );
-  
-  const explanationMap = new Map<string, string>();
-  for (const exp of explanations) {
-    explanationMap.set(exp.name, exp.explanation);
-  }
-  
-  log(`Generated ${explanationMap.size} explanations`);
-  return explanationMap;
+  return templates[category]?.(name, value, shortQuote) || `${name}: ${value}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -925,12 +884,9 @@ serve(async (req) => {
 
     log(`Classified ${classifiedFeatures.length} features`);
 
-    // Step 6: Generate explanations with Gemini (batch call)
-    const explanationMap = await generateExplanations(apiKey, classifiedFeatures, log);
-    
-    // Merge explanations into features
+    // Step 6: Generate explanations inline (no extra API call)
     for (const feature of classifiedFeatures) {
-      feature.explanation = explanationMap.get(feature.name) || `${feature.name}: ${feature.value}`;
+      feature.explanation = generateExplanation(feature);
     }
 
     // Step 7: Build response
