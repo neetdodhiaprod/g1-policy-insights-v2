@@ -423,7 +423,10 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Analyzing policy text (${policyText.length} characters)`);
+    // Sanitize input: remove control characters except newlines/tabs/carriage returns
+    const sanitizedPolicyText = policyText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+    console.log(`Analyzing policy text (${sanitizedPolicyText.length} characters)`);
 
     const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
     if (!anthropicApiKey) {
@@ -458,7 +461,7 @@ NOT health insurance: life insurance, motor insurance, travel insurance, bank st
 Use validate_document tool.
 
 Document (first 2000 chars):
-${policyText.substring(0, 2000)}`
+${sanitizedPolicyText.substring(0, 2000)}`
           }
         ]
       }),
@@ -527,7 +530,7 @@ REMEMBER:
 - Do NOT flag standard IRDAI exclusions
 
 Policy document:
-${policyText}`
+${sanitizedPolicyText}`
           }
         ]
       }),
@@ -562,10 +565,17 @@ ${policyText}`
     });
 
   } catch (error: unknown) {
-    console.error('Error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to analyze policy';
+    // Log full error details server-side for debugging
+    console.error('Error details:', error);
+    
+    // Return user-friendly message without exposing internal details
+    const isInvalidDocument = error instanceof Error && error.message.includes('invalid_document');
+    const userMessage = isInvalidDocument 
+      ? (error as Error).message 
+      : 'We encountered an issue analyzing your policy. Please try again.';
+    
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: userMessage }),
       { 
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
