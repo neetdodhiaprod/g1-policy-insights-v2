@@ -73,5 +73,35 @@ export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisR
   }
 
   console.log('Analysis received:', data.policyName);
-  return data as AnalysisResult;
+  
+  // Transform edge function response to match frontend expected format
+  const transformFeature = (f: any): PolicyFeature => ({
+    name: f.name || '',
+    quote: f.policyStates || f.quote || '',
+    reference: f.reference || '',
+    explanation: f.explanation || ''
+  });
+
+  const result: AnalysisResult = {
+    policyName: data.policyName || 'Unknown Policy',
+    insurer: data.insurer || 'Unknown',
+    sumInsured: data.sumInsured || 'Not specified',
+    policyType: data.policyType || 'Not specified',
+    documentType: 'Policy Wording',
+    summary: {
+      great: data.summary?.great || 0,
+      good: data.summary?.good || 0,
+      bad: data.summary?.redFlags || 0,
+      unclear: data.summary?.unclear || 0
+    },
+    features: {
+      great: (data.greatFeatures || []).map(transformFeature),
+      good: (data.goodFeatures || []).map(transformFeature),
+      bad: (data.redFlags || []).map(transformFeature),
+      unclear: (data.needsClarification || []).map(transformFeature)
+    },
+    disclaimer: data.disclaimer || 'This analysis is for informational purposes only.'
+  };
+
+  return result;
 }
