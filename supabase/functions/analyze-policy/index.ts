@@ -12,19 +12,19 @@ const corsHeaders = {
 
 const CONFIG = {
   system: {
-    model: "gemini-2.5-flash",
-    version: "3.1.0",
+    model: "gemini-2.5-flash-lite", // Faster model for speed
+    version: "3.2.0",
     api: {
-      maxRetries: 3,
-      retryDelayMs: 1000,
+      maxRetries: 2,
+      retryDelayMs: 500,
       backoffMultiplier: 2,
       temperature: 0.1
     },
     tokens: {
       validation: 500,
-      extraction: 16384,  // Increased from 8192 to handle large responses
-      judgment: 800,
-      explanations: 4096  // Increased from 2048
+      extraction: 8192,
+      judgment: 400,
+      explanations: 2048
     },
     cache: {
       enabled: true,
@@ -34,9 +34,9 @@ const CONFIG = {
     document: {
       minLength: 500,
       validationSample: 4000,
-      chunkSize: 50000,     // Reduced from 100000 for smaller extractions
-      chunkOverlap: 1000,   // Reduced from 2000
-      maxChunks: 8          // Increased from 5 to handle more chunks
+      chunkSize: 80000,     // Larger chunks = fewer API calls
+      chunkOverlap: 500,
+      maxChunks: 4          // Max 4 chunks to stay under timeout
     },
     bounds: {
       months: [0, 120],
@@ -773,33 +773,33 @@ serve(async (req) => {
     if (chunks.length === 1) {
       extraction = await callGemini(apiKey, extractionPrompt, chunks[0], extractionSchema, CONFIG.system.tokens.extraction);
     } else {
-      const exts = [];
-      for (let i = 0; i < chunks.length; i++) {
-        try {
-          log(`Extracting chunk ${i + 1}/${chunks.length}...`);
-          const chunkResult = await callGemini(
-            apiKey, 
-            extractionPrompt + `\n\nThis is part ${i + 1} of ${chunks.length}. Focus on features found in this section.`, 
-            chunks[i], 
-            extractionSchema, 
-            CONFIG.system.tokens.extraction
-          );
-          exts.push(chunkResult);
-          log(`Chunk ${i + 1} extracted successfully`);
-        } catch (chunkError: any) {
-          console.error(`Chunk ${i + 1} failed:`, chunkError.message);
-          // Continue with other chunks even if one fails
-          if (exts.length === 0 && i === chunks.length - 1) {
-            // All chunks failed
-            throw new Error('Failed to extract features from document');
-          }
-        }
-      }
+      // Process ALL chunks in PARALLEL for speed
+      log(`Processing ${chunks.length} chunks in parallel...`);
+      
+      const chunkPromises = chunks.map((chunk, i) => 
+        callGemini(
+          apiKey, 
+          extractionPrompt + `\n\nThis is part ${i + 1} of ${chunks.length}. Focus on features found in this section.`, 
+          chunk, 
+          extractionSchema, 
+          CONFIG.system.tokens.extraction
+        ).then(result => {
+          log(`Chunk ${i + 1} done`);
+          return result;
+        }).catch(err => {
+          console.error(`Chunk ${i + 1} failed:`, err.message);
+          return null; // Return null on failure, don't block others
+        })
+      );
+      
+      const results = await Promise.all(chunkPromises);
+      const exts = results.filter(r => r !== null);
       
       if (exts.length === 0) {
         throw new Error('Failed to extract features from any document section');
       }
       
+      log(`Successfully extracted ${exts.length}/${chunks.length} chunks`);
       extraction = mergeExtractions(exts);
     }
 
@@ -868,13 +868,19 @@ serve(async (req) => {
       classifiedFeatures.push({ id: 'proportionateDeduction', name: 'Room Rent Proportionate Deduction', category: "RED_FLAG", value: 'All expenses reduced proportionally', quote: f.roomRent.quote || '', reference: f.roomRent.reference || '', ruleApplied: "Proportionate deduction clause" });
     }
 
-    // Step 4: Judge unique features
+    // Step 4: Add unique features directly (skip slow AI judgment calls)
     for (const uf of extraction.uniqueFeatures || []) {
       if (!validateQuote(uf.quote, policyText)) continue;
-      try {
-        const j = await callGemini(apiKey, uniqueJudgmentPrompt.replace('{name}', uf.name).replace('{description}', uf.description).replace('{quote}', uf.quote), '', uniqueJudgmentSchema, CONFIG.system.tokens.judgment);
-        classifiedFeatures.push({ id: `unique_${uf.name}`, name: uf.name, category: j.category as Category, value: uf.description, quote: uf.quote, reference: uf.reference, ruleApplied: j.reasoning });
-      } catch (e) { log(`Error judging unique feature: ${e}`); }
+      // Default unique features to GOOD category to avoid extra API calls
+      classifiedFeatures.push({ 
+        id: `unique_${uf.name}`, 
+        name: uf.name, 
+        category: "GOOD" as Category, 
+        value: uf.description, 
+        quote: uf.quote, 
+        reference: uf.reference, 
+        ruleApplied: "Unique benefit" 
+      });
     }
 
     // Step 5: Add unclear clauses
