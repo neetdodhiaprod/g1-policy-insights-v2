@@ -1,6 +1,10 @@
 import { useState, useCallback } from "react";
 import { Upload, FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+
+const MAX_FILE_SIZE_MB = 20;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 interface UploadSectionProps {
   onAnalyze: (file: File) => void;
@@ -10,6 +14,19 @@ interface UploadSectionProps {
 const UploadSection = ({ onAnalyze, isLoading }: UploadSectionProps) => {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const { toast } = useToast();
+
+  const validateFileSize = (file: File): boolean => {
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: `Maximum file size is ${MAX_FILE_SIZE_MB}MB. Your file is ${(file.size / 1024 / 1024).toFixed(2)}MB.`,
+      });
+      return false;
+    }
+    return true;
+  };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -29,16 +46,27 @@ const UploadSection = ({ onAnalyze, isLoading }: UploadSectionProps) => {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       if (file.type === "application/pdf") {
-        setSelectedFile(file);
+        if (validateFileSize(file)) {
+          setSelectedFile(file);
+        }
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Invalid file type",
+          description: "Please upload a PDF file.",
+        });
       }
     }
-  }, []);
+  }, [toast]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+      const file = e.target.files[0];
+      if (validateFileSize(file)) {
+        setSelectedFile(file);
+      }
     }
-  }, []);
+  }, [toast]);
 
   const handleRemoveFile = () => {
     setSelectedFile(null);

@@ -393,6 +393,17 @@ serve(async (req) => {
   }
 
   try {
+    // Validate content length before processing
+    const MAX_REQUEST_SIZE = 25 * 1024 * 1024; // 25MB to account for base64 encoding overhead
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > MAX_REQUEST_SIZE) {
+      console.warn(`Request too large: ${contentLength} bytes`);
+      return new Response(
+        JSON.stringify({ error: 'Request payload too large. Maximum file size is 20MB.' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const { policyText } = await req.json();
 
     // Input validation
