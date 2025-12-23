@@ -661,11 +661,11 @@ RULES:
 
 EXTRACT: PED waiting, specific illness waiting, initial waiting, room rent (limits, proportionate deduction), co-pay (%, optional/mandatory, zone-based), restore benefit, pre/post hospitalization days, consumables, network hospitals count, day care, modern treatments, AYUSH, ambulance, disease sub-limits, NCB, global coverage, domiciliary, organ donor, maternity.
 
-UNIQUE FEATURES: List max 3 truly innovative benefits (not standard features).
+UNIQUE FEATURES: Find any innovative benefits beyond standard coverage that make this policy special.
 
-UNCLEAR CLAUSES: List max 2 genuinely ambiguous terms.
+UNCLEAR CLAUSES: Flag any ambiguous, contradictory, or confusing terms with the exact problematic language.
 
-NON-STANDARD EXCLUSIONS: Only list unusual exclusions beyond standard IRDAI list.`;
+NON-STANDARD EXCLUSIONS: Only list exclusions that go beyond standard IRDAI list.`;
 
 const explanationsPrompt = `Write customer-friendly explanations for each health insurance feature.
 
