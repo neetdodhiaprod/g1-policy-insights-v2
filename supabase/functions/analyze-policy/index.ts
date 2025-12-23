@@ -405,8 +405,22 @@ serve(async (req) => {
 
     const { policyText } = await req.json();
 
-    if (!policyText || policyText.trim().length < 100) {
-      throw new Error('Policy text is too short or empty');
+    // Input validation
+    const MIN_TEXT_LENGTH = 100;
+    const MAX_TEXT_LENGTH = 500000; // ~500KB
+
+    if (!policyText || policyText.trim().length < MIN_TEXT_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: 'Policy text is too short or empty' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (policyText.length > MAX_TEXT_LENGTH) {
+      return new Response(
+        JSON.stringify({ error: 'Policy text exceeds maximum allowed length of 500KB' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     console.log(`Analyzing policy text (${policyText.length} characters)`);

@@ -18,18 +18,11 @@ const Index = () => {
   const { toast } = useToast();
 
   const handleAnalyze = async (file: File) => {
-    console.log("Starting analysis for file:", file.name);
     setAppState("extracting");
 
     try {
       // Extract text from PDF
       const extractedText = await extractTextFromPDF(file);
-      
-      // Log extracted text for debugging
-      console.log("=== EXTRACTED PDF TEXT ===");
-      console.log(extractedText);
-      console.log("=== END EXTRACTED TEXT ===");
-      console.log(`Total characters extracted: ${extractedText.length}`);
 
       // Move to analyzing state
       setAppState("analyzing");
@@ -40,8 +33,6 @@ const Index = () => {
         setAnalysisResult(result);
         setAppState("results");
       } catch (analysisError) {
-        console.error("AI analysis error:", analysisError);
-        
         if (analysisError instanceof InvalidDocumentError) {
           toast({
             variant: "destructive",
@@ -66,8 +57,6 @@ const Index = () => {
       }
 
     } catch (error) {
-      console.error("PDF extraction error:", error);
-      
       if (error instanceof PDFError) {
         toast({
           variant: "destructive",
