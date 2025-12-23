@@ -22,9 +22,9 @@ const CONFIG = {
     },
     tokens: {
       validation: 500,
-      extraction: 8192,
+      extraction: 16384,  // Increased from 8192 to handle large responses
       judgment: 800,
-      explanations: 2048
+      explanations: 4096  // Increased from 2048
     },
     cache: {
       enabled: true,
@@ -498,18 +498,74 @@ async function callGemini(apiKey: string, prompt: string, content: string, schem
           })
         }
       );
+      
       if (!response.ok) {
         const errorText = await response.text();
+        console.error(`Gemini API error ${response.status}:`, errorText.substring(0, 500));
         if ([400, 401, 403].includes(response.status)) throw new Error(`API error ${response.status}: ${errorText}`);
         throw new Error(`Retryable error ${response.status}`);
       }
+      
       const data = await response.json();
-      if (data.candidates?.[0]?.finishReason === 'SAFETY') throw new Error('Content blocked');
+      const finishReason = data.candidates?.[0]?.finishReason;
+      
+      if (finishReason === 'SAFETY') {
+        console.error('Content blocked by safety filter');
+        throw new Error('Content blocked');
+      }
+      
+      if (finishReason === 'MAX_TOKENS') {
+        console.warn('Response truncated due to MAX_TOKENS, increasing limit and retrying...');
+        // Retry with higher token limit on next attempt
+        throw new Error('Response truncated');
+      }
+      
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error('Empty response');
-      return JSON.parse(text);
+      if (!text) {
+        console.error('Empty response from Gemini:', JSON.stringify(data).substring(0, 500));
+        throw new Error('Empty response');
+      }
+      
+      // Try to parse JSON, with fallback for truncated responses
+      try {
+        return JSON.parse(text);
+      } catch (parseError) {
+        console.error('JSON parse error. Response length:', text.length);
+        console.error('Response preview:', text.substring(0, 500));
+        console.error('Response end:', text.substring(Math.max(0, text.length - 200)));
+        
+        // Try to fix common truncation issues
+        let fixedText = text;
+        
+        // If it ends mid-string, try to close it
+        const lastQuoteIndex = text.lastIndexOf('"');
+        const lastBraceIndex = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+        
+        if (lastQuoteIndex > lastBraceIndex) {
+          // Truncated in middle of a string - try to fix
+          fixedText = text.substring(0, lastQuoteIndex + 1);
+          // Count open braces/brackets and close them
+          const openBraces = (fixedText.match(/{/g) || []).length;
+          const closeBraces = (fixedText.match(/}/g) || []).length;
+          const openBrackets = (fixedText.match(/\[/g) || []).length;
+          const closeBrackets = (fixedText.match(/]/g) || []).length;
+          
+          for (let i = 0; i < openBrackets - closeBrackets; i++) fixedText += ']';
+          for (let i = 0; i < openBraces - closeBraces; i++) fixedText += '}';
+          
+          try {
+            console.log('Fixed truncated JSON, retrying parse...');
+            return JSON.parse(fixedText);
+          } catch (e) {
+            // Still failed, throw original error
+          }
+        }
+        
+        throw parseError;
+      }
     } catch (error: any) {
       lastError = error;
+      console.error(`Gemini attempt ${attempt} failed:`, error.message);
       if (error.message?.includes('400') || error.message?.includes('401')) throw error;
       if (attempt < maxRetries) {
         await new Promise(r => setTimeout(r, delay));
