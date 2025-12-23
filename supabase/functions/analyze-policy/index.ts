@@ -34,9 +34,9 @@ const CONFIG = {
     document: {
       minLength: 500,
       validationSample: 4000,
-      chunkSize: 100000,
-      chunkOverlap: 2000,
-      maxChunks: 5
+      chunkSize: 50000,     // Reduced from 100000 for smaller extractions
+      chunkOverlap: 1000,   // Reduced from 2000
+      maxChunks: 8          // Increased from 5 to handle more chunks
     },
     bounds: {
       months: [0, 120],
@@ -653,18 +653,19 @@ const explanationsSchema = {
 const extractionPrompt = `Extract features from this Indian health insurance policy.
 
 RULES:
-1. Extract EXACT QUOTES - copy-paste relevant text from the policy
-2. Include CLAUSE/SECTION REFERENCE (e.g., "Clause 3.1.7", "Section 4.2(a)")
+1. Keep quotes SHORT (max 100 characters) - just the key phrase, not full paragraphs
+2. Include CLAUSE/SECTION REFERENCE (e.g., "Clause 3.1.7")
 3. Convert years to months (3 years = 36 months)
-4. If not found, set found: false
+4. If not found, set found: false and leave quote empty
+5. Focus on extracting VALUES, not full text
 
 EXTRACT: PED waiting, specific illness waiting, initial waiting, room rent (limits, proportionate deduction), co-pay (%, optional/mandatory, zone-based), restore benefit, pre/post hospitalization days, consumables, network hospitals count, day care, modern treatments, AYUSH, ambulance, disease sub-limits, NCB, global coverage, domiciliary, organ donor, maternity.
 
-UNIQUE FEATURES: Find any innovative benefits beyond standard coverage that make this policy special.
+UNIQUE FEATURES: List max 3 truly innovative benefits (not standard features).
 
-UNCLEAR CLAUSES: Flag any ambiguous, contradictory, or confusing terms with the exact problematic language.
+UNCLEAR CLAUSES: List max 2 genuinely ambiguous terms.
 
-NON-STANDARD EXCLUSIONS: Only list exclusions that go beyond standard IRDAI exclusions.`;
+NON-STANDARD EXCLUSIONS: Only list unusual exclusions beyond standard IRDAI list.`;
 
 const explanationsPrompt = `Write customer-friendly explanations for each health insurance feature.
 
@@ -806,16 +807,40 @@ serve(async (req) => {
     // Step 2: Extract features
     log('Extracting features...');
     const chunks = chunkDocument(policyText);
+    log(`Processing ${chunks.length} chunks...`);
+    
     let extraction: any;
     
     if (chunks.length === 1) {
       extraction = await callGemini(apiKey, extractionPrompt, chunks[0], extractionSchema, CONFIG.system.tokens.extraction);
     } else {
-      log(`Processing ${chunks.length} chunks...`);
       const exts = [];
       for (let i = 0; i < chunks.length; i++) {
-        exts.push(await callGemini(apiKey, extractionPrompt + `\n\nPart ${i + 1} of ${chunks.length}.`, chunks[i], extractionSchema, CONFIG.system.tokens.extraction));
+        try {
+          log(`Extracting chunk ${i + 1}/${chunks.length}...`);
+          const chunkResult = await callGemini(
+            apiKey, 
+            extractionPrompt + `\n\nThis is part ${i + 1} of ${chunks.length}. Focus on features found in this section.`, 
+            chunks[i], 
+            extractionSchema, 
+            CONFIG.system.tokens.extraction
+          );
+          exts.push(chunkResult);
+          log(`Chunk ${i + 1} extracted successfully`);
+        } catch (chunkError: any) {
+          console.error(`Chunk ${i + 1} failed:`, chunkError.message);
+          // Continue with other chunks even if one fails
+          if (exts.length === 0 && i === chunks.length - 1) {
+            // All chunks failed
+            throw new Error('Failed to extract features from document');
+          }
+        }
       }
+      
+      if (exts.length === 0) {
+        throw new Error('Failed to extract features from any document section');
+      }
+      
       extraction = mergeExtractions(exts);
     }
 
