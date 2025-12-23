@@ -61,11 +61,30 @@ const CONFIG = {
   // Keywords for code-based validation
   validation: {
     healthKeywords: [
-      'hospitalization', 'sum insured', 'cashless', 'pre-existing',
-      'waiting period', 'room rent', 'irdai', 'tpa', 'network hospital',
-      'in-patient', 'inpatient', 'day care', 'daycare', 'co-pay', 'copay',
-      'claim settlement', 'mediclaim', 'health insurance', 'medical expenses',
-      'hospital cash', 'critical illness', 'pre-hospitalization', 'post-hospitalization'
+      // Core terms
+      'health insurance', 'hospitalization', 'hospitalisation', 'sum insured', 'cashless',
+      // Waiting periods
+      'waiting period', 'pre-existing', 'preexisting', 'pre existing',
+      // Room & facilities  
+      'room rent', 'network hospital', 'empanelled hospital', 'panel hospital',
+      // Regulatory
+      'irdai', 'irda', 'tpa', 'third party administrator',
+      // Patient types
+      'in-patient', 'inpatient', 'in patient', 'out-patient', 'outpatient',
+      // Day care
+      'day care', 'daycare', 'day-care',
+      // Co-payment (multiple variations)
+      'co-pay', 'copay', 'co-payment', 'copayment', 'co payment',
+      // Claims
+      'claim settlement', 'cashless claim', 'reimbursement claim',
+      // Products
+      'mediclaim', 'medical expenses', 'hospital cash', 'critical illness',
+      // Pre/post hospital
+      'pre-hospitalization', 'post-hospitalization', 'prehospitalization', 'posthospitalization',
+      'pre hospitalization', 'post hospitalization',
+      // Other indicators
+      'policy holder', 'policyholder', 'insured person', 'coverage', 'exclusion',
+      'deductible', 'sub-limit', 'sublimit', 'no claim bonus', 'cumulative bonus'
     ],
     wrongDocKeywords: [
       'life insurance', 'term plan', 'death benefit', 'maturity benefit', 'endowment',
@@ -76,7 +95,7 @@ const CONFIG = {
       'resume', 'curriculum vitae', 'work experience', 'education qualification',
       'invoice', 'bill of supply', 'gst number'
     ],
-    minHealthKeywords: 5,
+    minHealthKeywords: 4,  // Lowered from 5
     minWrongKeywords: 2
   },
 
@@ -218,12 +237,18 @@ function validateWithCode(text: string): {
   reason: string;
   documentType: string;
 } {
-  const lower = text.toLowerCase();
+  // Normalize text: replace various dashes with hyphen, normalize whitespace
+  const normalized = text
+    .toLowerCase()
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-')  // Various dash chars to hyphen
+    .replace(/\s+/g, ' ');  // Normalize whitespace
   
   const { healthKeywords, wrongDocKeywords, minHealthKeywords, minWrongKeywords } = CONFIG.validation;
   
-  const healthMatches = healthKeywords.filter(kw => lower.includes(kw));
-  const wrongMatches = wrongDocKeywords.filter(kw => lower.includes(kw));
+  const healthMatches = healthKeywords.filter(kw => normalized.includes(kw));
+  const wrongMatches = wrongDocKeywords.filter(kw => normalized.includes(kw));
+  
+  console.log(`Validation: Found ${healthMatches.length} health keywords: ${healthMatches.slice(0, 5).join(', ')}...`);
   
   // Definitely wrong document type
   if (wrongMatches.length >= minWrongKeywords) {
@@ -250,12 +275,12 @@ function validateWithCode(text: string): {
     };
   }
   
-  // Definitely health insurance
-  if (healthMatches.length >= minHealthKeywords + 2) { // 7+ keywords = confident
+  // Definitely health insurance (6+ keywords = confident)
+  if (healthMatches.length >= minHealthKeywords + 2) {
     return { 
       definitelyValid: true, 
       definitelyInvalid: false, 
-      reason: `Found ${healthMatches.length} health insurance keywords`,
+      reason: `Found ${healthMatches.length} health insurance keywords: ${healthMatches.slice(0, 5).join(', ')}`,
       documentType: 'Health Insurance'
     };
   }
