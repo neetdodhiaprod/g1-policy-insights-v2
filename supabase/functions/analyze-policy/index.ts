@@ -10,7 +10,7 @@ const corsHeaders = {
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
 const CONFIG = {
-  version: "9.0.0",
+  version: "9.1.0",
   model: "claude-3-5-haiku-20241022",
   maxTokens: 4096,
   temperature: 0.1,
@@ -69,35 +69,35 @@ const ANALYSIS_TOOL = {
             name: { type: "string", description: "Feature name (e.g., 'No Room Rent Limit')" },
             policyStates: { type: "string", description: "Short quote from policy, max 50 characters" },
             reference: { type: "string", description: "Section or page reference" },
-            explanation: { type: "string", description: "2-3 sentence explanation of why this benefits the policyholder, with practical examples" }
+            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentence explanation with practical examples" }
           },
           required: ["name", "policyStates", "explanation"]
         }
       },
       goodFeatures: {
         type: "array",
-        description: "3-5 features that meet industry standards",
+        description: "3-5 features that meet industry standards. MUST include PED waiting period if 24 months.",
         items: {
           type: "object",
           properties: {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "2-3 sentence explanation of what this means for the policyholder" }
+            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentence explanation" }
           },
           required: ["name", "policyStates", "explanation"]
         }
       },
       redFlags: {
         type: "array",
-        description: "ALL concerning clauses or limitations - never skip any",
+        description: "ALL concerning clauses. MUST include PED waiting if 36+ months, Specific illness waiting if 36+ months.",
         items: {
           type: "object",
           properties: {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "2-3 sentence explanation of the financial/practical impact and what could go wrong during a claim" }
+            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentences on financial/practical impact" }
           },
           required: ["name", "policyStates", "explanation"]
         }
@@ -111,7 +111,7 @@ const ANALYSIS_TOOL = {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "2-3 sentences explaining what's unclear and what specific question to ask the insurer" }
+            explanation: { type: "string", description: "Start with 'What this means:' followed by what's unclear and what question to ask" }
           },
           required: ["name", "policyStates", "explanation"]
         }
@@ -125,81 +125,69 @@ const ANALYSIS_TOOL = {
 // ║ SYSTEM PROMPT - Expert analysis with corrected logic                       ║
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
-const SYSTEM_PROMPT = `You are an expert analyst for Indian health insurance policies. Your job is to thoroughly analyze policy documents and categorize features accurately.
+const SYSTEM_PROMPT = `You are an expert analyst for Indian health insurance policies. Analyze thoroughly and categorize features accurately.
+
+## MANDATORY WAITING PERIOD ANALYSIS
+You MUST find and categorize these waiting periods in EVERY policy:
+
+1. PED (Pre-Existing Disease) Waiting Period:
+   - GREAT: No PED waiting OR ≤12 months (very rare)
+   - GOOD: 24 months (IRDAI standard - most policies have this)
+   - RED_FLAG: 36 months, 48 months, or longer
+
+2. Specific Illness Waiting Period (for conditions like cataract, hernia, knee replacement, etc.):
+   - GREAT: No specific illness waiting OR ≤12 months
+   - GOOD: 24 months (standard)
+   - RED_FLAG: 36+ months
+
+3. Initial Waiting Period:
+   - GREAT: No initial waiting
+   - GOOD: 30 days (industry norm)
+   - RED_FLAG: >30 days
 
 ## CATEGORIZATION RULES
 
-### GREAT (Best-in-class - rare, premium policies)
-- Room Rent: No limit / "any room" / no sub-limit
-- PED Waiting: No PED waiting OR ≤12 months (very rare, exceptional)
-- Specific Illness Waiting: No waiting OR ≤12 months
-- Initial Waiting: No initial waiting period
-- Pre-hospitalization: ≥60 days
-- Post-hospitalization: ≥180 days
+### GREAT (Best-in-class)
+- Room Rent: No limit / "any room"
 - No co-pay at any age
 - Restore: Unlimited OR same illness covered
-- Consumables: Fully covered with no sub-limits
-- Modern treatments: AYUSH, robotic surgery, gene therapy fully covered
-- No disease-wise sub-limits
+- Consumables: Fully covered
+- Pre-hospitalization: ≥60 days
+- Post-hospitalization: ≥180 days
+- Modern treatments fully covered (AYUSH, robotic surgery)
 - Worldwide emergency cover
 
-### GOOD (Industry standard - most quality policies)
+### GOOD (Industry standard)
 - Room Rent: Single private AC room
-- PED Waiting: 24 months (IRDAI standard - this is the norm)
-- Specific Illness Waiting: 24 months
-- Initial Waiting: 30 days
+- Co-pay: Optional OR senior-only (60+)
+- Restore: Different illness only
 - Pre-hospitalization: 30-59 days
 - Post-hospitalization: 60-179 days
-- Co-pay: Optional OR only for senior citizens (60+)
-- Restore: Different illness only
-- Day care: 140+ procedures covered
+- Day care: 140+ procedures
 
-### RED_FLAG (Concerning - potential claim issues)
-- Room Rent: Daily cap (₹X/day) OR proportionate deduction
-- PED Waiting: 36 months, 48 months, or longer (worse than IRDAI standard)
-- Specific Illness Waiting: 36+ months
-- Initial Waiting: >30 days
-- Pre-hospitalization: <30 days
-- Post-hospitalization: <60 days
+### RED_FLAG (Concerning)
+- Room Rent: Daily cap OR proportionate deduction
 - Co-pay: Mandatory for all ages
-- No restore/recharge benefit
-- Consumables: Not covered or capped
-- Sub-limits on common procedures (cataract, knee replacement, etc.)
-- Zone-based restrictions reducing coverage
-- Mandatory deductibles
+- No restore benefit
+- Consumables: Not covered
+- Sub-limits on common procedures
+- Zone-based restrictions
 
-### UNCLEAR (Needs clarification)
-- Vague language ("as per company norms", "reasonable expenses")
-- Conflicting statements in different sections
-- Missing critical coverage details
-- Ambiguous exclusion clauses
+## EXPLANATION FORMAT
+ALWAYS start explanations with "What this means:" followed by 2-3 simple sentences.
 
-## EXPLANATION GUIDELINES
+Examples:
+- GREAT: "What this means: You can choose any hospital room without worrying about deductions. Most policies cap room rent and reduce your entire claim proportionately if you exceed it."
+- GOOD: "What this means: The 24-month PED waiting period is the industry standard set by IRDAI. After 2 years, all your pre-existing conditions will be covered."
+- RED_FLAG: "What this means: With a 48-month PED waiting period, claims for pre-existing conditions like diabetes or BP will be rejected for the first 4 years. This is double the industry standard of 24 months."
 
-Write explanations that a non-expert can understand. Use 2-3 sentences.
-
-For GREAT features:
-- Explain what this means during an actual claim
-- Compare to what typical/worse policies offer
-- Example: "During hospitalization, you can choose any room including suites without worrying about deductions. Most policies cap room rent at ₹5,000-8,000/day and deduct proportionately from your entire bill if you exceed it."
-
-For RED FLAGS:
-- Explain the actual financial impact
-- Describe what could go wrong during a claim
-- Example: "With a 48-month PED waiting period, if you have diabetes and get hospitalized in year 2 or 3, your entire claim will be rejected. The IRDAI standard is 24 months, so this policy makes you wait twice as long."
-
-For UNCLEAR items:
-- Explain what information is missing or confusing
-- Suggest a specific question to ask the insurer
-- Example: "The policy mentions 'reasonable ambulance charges' without specifying a limit. Ask your insurer: 'What is the maximum ambulance reimbursement amount, and does it cover air ambulance?'"
-
-## IMPORTANT RULES
-1. Extract ALL red flags - never skip concerning clauses
-2. PED waiting of 24 months is GOOD (industry standard), not GREAT
-3. PED waiting of 36+ months is a RED FLAG
-4. Discover UNIQUE features (wellness rewards, OPD cover, mental health, etc.)
-5. Keep policyStates quotes SHORT (max 50 characters)
-6. Always include practical examples in explanations`;
+## CRITICAL RULES
+1. ALWAYS evaluate and categorize PED waiting period
+2. ALWAYS evaluate and categorize Specific Illness waiting period  
+3. 24-month PED/Specific illness = GOOD (not GREAT)
+4. 36+ month PED/Specific illness = RED_FLAG
+5. Keep policyStates quotes SHORT (max 50 chars)
+6. Every explanation MUST start with "What this means:"`;
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗
 // ║ CLAUDE API CALL WITH TOOL USE                                              ║
