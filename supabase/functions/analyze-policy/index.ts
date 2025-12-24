@@ -121,10 +121,16 @@ async function analyzeWithClaude(apiKey: string, policyText: string): Promise<an
         max_tokens: CONFIG.maxTokens,
         temperature: CONFIG.temperature,
         system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: `Analyze this health insurance policy:\n\n${policyText}`
-        }]
+        messages: [
+          {
+            role: 'user',
+            content: `Analyze this health insurance policy and return ONLY a valid JSON object. No explanations, no markdown, just the JSON:\n\n${policyText}`
+          },
+          {
+            role: 'assistant',
+            content: '{'
+          }
+        ]
       })
     });
 
@@ -142,13 +148,8 @@ async function analyzeWithClaude(apiKey: string, policyText: string): Promise<an
       throw new Error('Empty response from Claude');
     }
 
-    // Extract JSON from response (handle markdown code blocks)
-    let jsonStr = text;
-    if (text.includes('```json')) {
-      jsonStr = text.split('```json')[1].split('```')[0];
-    } else if (text.includes('```')) {
-      jsonStr = text.split('```')[1].split('```')[0];
-    }
+    // Prepend the '{' we used as prefill
+    const jsonStr = '{' + text;
 
     return JSON.parse(jsonStr.trim());
 
