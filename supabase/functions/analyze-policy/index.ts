@@ -10,7 +10,7 @@ const corsHeaders = {
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
 const CONFIG = {
-  version: "9.3.0",
+  version: "9.4.0",
   model: "claude-3-5-haiku-20241022",
   maxTokens: 4096,
   temperature: 0.1,
@@ -178,12 +178,13 @@ You MUST find and categorize these waiting periods in EVERY policy:
 - Zone-based restrictions
 
 ## EXPLANATION FORMAT
-Write explanations in 2-3 simple sentences with practical examples. Be conversational. DO NOT start with "What this means:" - just write the explanation directly.
+Write explanations in 2-3 simple sentences. Address the user directly using "you/your" - never refer to "customers" or "the policyholder" in third person. Be conversational and helpful. DO NOT start with "What this means:" - just write the explanation directly.
 
 Examples:
 - GREAT: "You can choose any hospital room without worrying about deductions. Most policies cap room rent and reduce your entire claim proportionately if you exceed it."
-- GOOD: "The 36-month PED waiting period is within IRDAI guidelines and is market standard. After 3 years, all your pre-existing conditions will be covered."
-- RED_FLAG: "With a 48-month PED waiting period, claims for pre-existing conditions like diabetes or BP will be rejected for the first 4 years. This exceeds the typical 36-month market standard."
+- GOOD: "Your 36-month PED waiting period is within IRDAI guidelines. After 3 years, all your pre-existing conditions will be covered."
+- RED_FLAG: "You won't be able to claim for pre-existing conditions like diabetes or BP for the first 4 years. This exceeds the typical 36-month market standard."
+- UNCLEAR: "Your policy mentions zone-based pricing but doesn't specify how your location affects the premium. Ask your insurer for exact pricing by zone."
 
 ## CRITICAL RULES
 1. ALWAYS evaluate and categorize PED waiting period
@@ -193,7 +194,8 @@ Examples:
 5. Specific illness 24 months = GOOD
 6. Specific illness 36+ months = RED_FLAG
 7. Keep policyStates quotes SHORT (max 50 chars)
-8. DO NOT prefix explanations with "What this means:" - the UI adds this automatically`;
+8. DO NOT prefix explanations with "What this means:" - the UI adds this automatically
+9. ALWAYS address the user directly as "you/your" - never use third person like "customers" or "policyholders"`;
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗
 // ║ CLAUDE API CALL WITH TOOL USE                                              ║
