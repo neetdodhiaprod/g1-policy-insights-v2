@@ -10,7 +10,7 @@ const corsHeaders = {
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
 const CONFIG = {
-  version: "9.1.0",
+  version: "9.2.0",
   model: "claude-3-5-haiku-20241022",
   maxTokens: 4096,
   temperature: 0.1,
@@ -60,6 +60,10 @@ const ANALYSIS_TOOL = {
         type: "string", 
         description: "Coverage amount (e.g., '₹5 Lakhs', '₹1 Crore')" 
       },
+      policyType: {
+        type: "string",
+        description: "Type of policy (e.g., 'Individual', 'Family Floater', 'Top-up')"
+      },
       greatFeatures: {
         type: "array",
         description: "5-7 best-in-class features that exceed industry standards",
@@ -69,7 +73,7 @@ const ANALYSIS_TOOL = {
             name: { type: "string", description: "Feature name (e.g., 'No Room Rent Limit')" },
             policyStates: { type: "string", description: "Short quote from policy, max 50 characters" },
             reference: { type: "string", description: "Section or page reference" },
-            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentence explanation with practical examples" }
+            explanation: { type: "string", description: "2-3 sentence explanation with practical examples" }
           },
           required: ["name", "policyStates", "explanation"]
         }
@@ -83,7 +87,7 @@ const ANALYSIS_TOOL = {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentence explanation" }
+            explanation: { type: "string", description: "2-3 sentence explanation" }
           },
           required: ["name", "policyStates", "explanation"]
         }
@@ -97,7 +101,7 @@ const ANALYSIS_TOOL = {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "Start with 'What this means:' followed by 2-3 sentences on financial/practical impact" }
+            explanation: { type: "string", description: "2-3 sentences on financial/practical impact" }
           },
           required: ["name", "policyStates", "explanation"]
         }
@@ -111,13 +115,13 @@ const ANALYSIS_TOOL = {
             name: { type: "string" },
             policyStates: { type: "string" },
             reference: { type: "string" },
-            explanation: { type: "string", description: "Start with 'What this means:' followed by what's unclear and what question to ask" }
+            explanation: { type: "string", description: "What's unclear and what question to ask" }
           },
           required: ["name", "policyStates", "explanation"]
         }
       }
     },
-    required: ["policyName", "insurer", "sumInsured", "greatFeatures", "goodFeatures", "redFlags", "needsClarification"]
+    required: ["policyName", "insurer", "sumInsured", "policyType", "greatFeatures", "goodFeatures", "redFlags", "needsClarification"]
   }
 };
 
@@ -174,20 +178,19 @@ You MUST find and categorize these waiting periods in EVERY policy:
 - Zone-based restrictions
 
 ## EXPLANATION FORMAT
-ALWAYS start explanations with "What this means:" followed by 2-3 simple sentences.
+Write explanations in 2-3 simple sentences with practical examples. Be conversational.
 
 Examples:
-- GREAT: "What this means: You can choose any hospital room without worrying about deductions. Most policies cap room rent and reduce your entire claim proportionately if you exceed it."
-- GOOD: "What this means: The 24-month PED waiting period is the industry standard set by IRDAI. After 2 years, all your pre-existing conditions will be covered."
-- RED_FLAG: "What this means: With a 48-month PED waiting period, claims for pre-existing conditions like diabetes or BP will be rejected for the first 4 years. This is double the industry standard of 24 months."
+- GREAT: "You can choose any hospital room without worrying about deductions. Most policies cap room rent and reduce your entire claim proportionately if you exceed it."
+- GOOD: "The 24-month PED waiting period is the industry standard set by IRDAI. After 2 years, all your pre-existing conditions will be covered."
+- RED_FLAG: "With a 48-month PED waiting period, claims for pre-existing conditions like diabetes or BP will be rejected for the first 4 years. This is double the industry standard of 24 months."
 
 ## CRITICAL RULES
 1. ALWAYS evaluate and categorize PED waiting period
 2. ALWAYS evaluate and categorize Specific Illness waiting period  
 3. 24-month PED/Specific illness = GOOD (not GREAT)
 4. 36+ month PED/Specific illness = RED_FLAG
-5. Keep policyStates quotes SHORT (max 50 chars)
-6. Every explanation MUST start with "What this means:"`;
+5. Keep policyStates quotes SHORT (max 50 chars)`;
 
 // ╔═══════════════════════════════════════════════════════════════════════════╗
 // ║ CLAUDE API CALL WITH TOOL USE                                              ║
@@ -221,8 +224,6 @@ async function analyzeWithClaude(apiKey: string, policyText: string): Promise<an
         }]
       })
     });
-
-    clearTimeout(timeout);
 
     if (!response.ok) {
       const error = await response.text();

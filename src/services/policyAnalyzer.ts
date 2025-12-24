@@ -1,32 +1,8 @@
 import { supabase } from '@/integrations/supabase/client';
+import { PolicyFeature, PolicyAnalysis } from '@/lib/mockData';
 
-export interface PolicyFeature {
-  name: string;
-  quote: string;
-  reference: string;
-  explanation: string;
-}
-
-export interface AnalysisResult {
-  policyName: string;
-  insurer: string;
-  sumInsured: string;
-  policyType: string;
-  documentType: string;
-  summary: {
-    great: number;
-    good: number;
-    bad: number;
-    unclear: number;
-  };
-  features: {
-    great: PolicyFeature[];
-    good: PolicyFeature[];
-    bad: PolicyFeature[];
-    unclear: PolicyFeature[];
-  };
-  disclaimer: string;
-}
+// Re-export types for consumers
+export type { PolicyFeature, PolicyAnalysis as AnalysisResult };
 
 export class PolicyAnalysisError extends Error {
   constructor(
@@ -46,7 +22,7 @@ export class InvalidDocumentError extends PolicyAnalysisError {
   }
 }
 
-export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisResult> {
+export async function analyzePolicyWithAI(policyText: string): Promise<PolicyAnalysis> {
   console.log(`Sending policy text for analysis (${policyText.length} characters)`);
 
   const { data, error } = await supabase.functions.invoke('analyze-policy', {
@@ -61,7 +37,6 @@ export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisR
   if (data?.error) {
     console.error('Analysis error:', data.error, data.message);
     
-    // Handle invalid document type
     if (data.error === 'invalid_document') {
       throw new InvalidDocumentError(
         data.message || 'This does not appear to be a health insurance policy.',
@@ -74,7 +49,6 @@ export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisR
 
   console.log('Analysis received:', data.policyName);
   
-  // Transform edge function response to match frontend expected format
   const transformFeature = (f: any): PolicyFeature => ({
     name: f.name || '',
     quote: f.policyStates || f.quote || '',
@@ -82,7 +56,7 @@ export async function analyzePolicyWithAI(policyText: string): Promise<AnalysisR
     explanation: f.explanation || ''
   });
 
-  const result: AnalysisResult = {
+  const result: PolicyAnalysis = {
     policyName: data.policyName || 'Unknown Policy',
     insurer: data.insurer || 'Unknown',
     sumInsured: data.sumInsured || 'Not specified',
