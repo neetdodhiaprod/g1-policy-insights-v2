@@ -286,6 +286,10 @@ REMEMBER:
 - Proportionate deduction = RED FLAG (if present)
 - Pre/Post ≥60/180 days = GREAT
 
+MUST FLAG AS RED FLAG (if present in policy):
+- Proportionate deduction - search for "proportional share" or "proportionate"
+- Room rent daily cap - search for "₹" + "/day" or "per day"
+
 Policy:
 ${policyText}`
         }]
